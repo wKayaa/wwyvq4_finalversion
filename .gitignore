@@ -27,6 +27,16 @@ security_scan_results/
 *.log
 .pytest_cache/
 
+# F8S Framework specific exclusions
+results/
+sessions/
+test_results/
+test_*.txt
+*_test.txt
+test_pipeline_targets.txt
+*.yaml.bak
+*.json.bak
+
 # IDE and editor files
 .vscode/
 .idea/
