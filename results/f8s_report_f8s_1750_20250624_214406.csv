@@ -1,0 +1,14 @@
+Metric,Value
+session_session_id,f8s_1750801366_fa804e27
+session_mode,all
+session_start_time,2025-06-24T21:42:46.602204
+session_end_time,2025-06-24T21:44:06.294824
+session_duration_seconds,79.69262
+session_success,False
+targets_processed,0
+clusters_found,0
+clusters_exploited,0
+credentials_extracted,0
+credentials_validated,0
+persistent_access,0
+notifications_sent,0

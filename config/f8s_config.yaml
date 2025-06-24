@@ -1,0 +1,79 @@
+advanced:
+  cleanup_on_exit: true
+  error_threshold: 10
+  log_level: INFO
+  memory_limit_mb: 1024
+  session_persistence: true
+api_server:
+  enable_cors: true
+  enabled: false
+  host: 0.0.0.0
+  port: 8080
+core:
+  max_concurrent_targets: 100
+  retry_count: 3
+  skip_on_fail: true
+  timeout_per_operation: 15
+integrations:
+  discord:
+    enabled: false
+    notify_findings: true
+    webhook_url: null
+  telegram:
+    chat_id: null
+    enabled: false
+    notify_completion: true
+    notify_errors: true
+    notify_findings: true
+    notify_start: true
+    token: null
+modules:
+  exploiter:
+    aggressive_mode: false
+    enabled: true
+    exploit_timeout: 30
+    stealth_mode: false
+  extractor:
+    enabled: true
+    extract_certificates: true
+    extract_secrets: true
+    extract_tokens: true
+  persistence:
+    backdoor_pods: false
+    create_accounts: false
+    enabled: true
+    steal_tokens: true
+  scanner:
+    enabled: true
+    ports:
+    - 6443
+    - 8443
+    - 443
+    - 80
+    - 8080
+    - 8001
+    - 8888
+    timeout: 5
+    user_agent: Mozilla/5.0 (compatible; F8S-Scanner/2.0)
+  validator:
+    enabled: true
+    validate_aws: true
+    validate_azure: true
+    validate_gcp: true
+    validate_sendgrid: true
+    validate_smtp: true
+output:
+  compress_results: false
+  detailed_logs: true
+  directory: ./results
+  export_format: json
+security:
+  max_redirects: 3
+  user_agent: Mozilla/5.0 (compatible; F8S-Framework/2.0)
+  validate_ssl: true
+  verify_certificates: false
+web_interface:
+  debug: false
+  enabled: false
+  host: 0.0.0.0
+  port: 5000
