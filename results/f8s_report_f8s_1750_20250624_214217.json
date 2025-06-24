@@ -1,0 +1,31 @@
+{
+  "session_info": {
+    "session_id": "f8s_1750801308_ce962269",
+    "mode": "scan",
+    "start_time": "2025-06-24T21:41:48.027534",
+    "end_time": "2025-06-24T21:42:17.285371",
+    "duration_seconds": 29.257837,
+    "success": false
+  },
+  "summary": {
+    "targets_processed": 0,
+    "clusters_found": 0,
+    "clusters_exploited": 0,
+    "credentials_extracted": 0,
+    "credentials_validated": 0,
+    "persistent_access": 0,
+    "notifications_sent": 0
+  },
+  "detailed_stats": {
+    "targets_processed": 0,
+    "clusters_found": 0,
+    "clusters_exploited": 0,
+    "credentials_extracted": 0,
+    "credentials_validated": 0,
+    "services_compromised": 0,
+    "persistent_access": 0,
+    "notifications_sent": 0,
+    "errors": []
+  },
+  "generated_at": "2025-06-24T21:42:17.285442"
+}

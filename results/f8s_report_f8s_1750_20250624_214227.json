@@ -1,0 +1,31 @@
+{
+  "session_info": {
+    "session_id": "f8s_1750801347_aae72867",
+    "mode": "exploit",
+    "start_time": "2025-06-24T21:42:27.359413",
+    "end_time": "2025-06-24T21:42:27.548681",
+    "duration_seconds": 0.189268,
+    "success": false
+  },
+  "summary": {
+    "targets_processed": 0,
+    "clusters_found": 0,
+    "clusters_exploited": 0,
+    "credentials_extracted": 0,
+    "credentials_validated": 0,
+    "persistent_access": 0,
+    "notifications_sent": 0
+  },
+  "detailed_stats": {
+    "targets_processed": 0,
+    "clusters_found": 0,
+    "clusters_exploited": 0,
+    "credentials_extracted": 0,
+    "credentials_validated": 0,
+    "services_compromised": 0,
+    "persistent_access": 0,
+    "notifications_sent": 0,
+    "errors": []
+  },
+  "generated_at": "2025-06-24T21:42:27.548753"
+}
