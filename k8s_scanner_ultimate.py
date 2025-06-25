@@ -41,6 +41,7 @@ class ScanMode(Enum):
     BALANCED = "balanced"
     AGGRESSIVE = "aggressive"
     ULTIMATE = "ultimate"
+    TURBO = "turbo"
 
 class ValidationType(Enum):
     """Types of credential validation"""
@@ -64,6 +65,14 @@ class ScannerConfig:
     user_agents: List[str] = field(default_factory=list)
     proxy_config: Optional[Dict] = None
     rate_limit_per_second: int = 50
+    
+    # Turbo mode optimizations
+    turbo_timeout: int = 3
+    turbo_max_concurrent: int = 5000
+    turbo_connector_limit: int = 5000
+    turbo_connector_limit_per_host: int = 1000
+    turbo_checkpoint_interval: int = 500
+    turbo_ports: List[int] = field(default_factory=lambda: [6443, 8443, 10250])  # Critical K8s ports only
 
 @dataclass
 class CredentialMatch:
@@ -292,8 +301,12 @@ class K8sUltimateScanner:
             "end_time": None
         }
         
-        # K8s specific ports and endpoints
-        self.k8s_ports = [6443, 8443, 443, 80, 8080, 8001, 8888, 9443, 10250, 10251, 10252, 2379, 2380]
+        # K8s specific ports and endpoints - optimize for turbo mode
+        if self.config.mode == ScanMode.TURBO:
+            self.k8s_ports = self.config.turbo_ports  # Use only critical ports
+        else:
+            self.k8s_ports = [6443, 8443, 443, 80, 8080, 8001, 8888, 9443, 10250, 10251, 10252, 2379, 2380]
+        
         self.metadata_endpoints = [
             "http://169.254.169.254/latest/meta-data/",  # AWS
             "http://metadata.google.internal/computeMetadata/v1/",  # GCP
@@ -375,8 +388,9 @@ class K8sUltimateScanner:
         await self.credential_validator.initialize()
         
         try:
-            # Create semaphore for concurrency control
-            semaphore = asyncio.Semaphore(self.config.max_concurrent)
+            # Create semaphore for concurrency control - optimize for turbo mode
+            max_concurrent = self.config.turbo_max_concurrent if self.config.mode == ScanMode.TURBO else self.config.max_concurrent
+            semaphore = asyncio.Semaphore(max_concurrent)
             
             # Create scanning tasks
             tasks = [
@@ -384,8 +398,8 @@ class K8sUltimateScanner:
                 for ip in expanded_ips
             ]
             
-            # Process in batches with checkpoint saving
-            batch_size = self.config.checkpoint_interval
+            # Process in batches with checkpoint saving - optimize batch size for turbo mode
+            batch_size = self.config.turbo_checkpoint_interval if self.config.mode == ScanMode.TURBO else self.config.checkpoint_interval
             for i in range(0, len(tasks), batch_size):
                 batch = tasks[i:i + batch_size]
                 batch_results = await asyncio.gather(*batch, return_exceptions=True)
@@ -398,15 +412,34 @@ class K8sUltimateScanner:
                     elif isinstance(result, Exception):
                         self.logger.error(f"Scan error: {result}")
                 
-                # Save checkpoint
-                if self.config.enable_checkpoint:
+                # Save checkpoint - skip in turbo mode for performance unless forced
+                if self.config.enable_checkpoint and (self.config.mode != ScanMode.TURBO or i % (batch_size * 2) == 0):
                     self.checkpoint_manager.save_checkpoint(
                         self.processed_ips,
                         self.scan_results,
                         self.scan_stats
                     )
                 
-                self.logger.info(f"📊 Processed {len(self.processed_ips)}/{self.scan_stats['total_ips']} IPs")
+                # Progress reporting with performance monitoring
+                processed_count = len(self.processed_ips)
+                total_count = self.scan_stats['total_ips']
+                progress_percent = (processed_count / total_count * 100) if total_count > 0 else 0
+                
+                # Calculate ETA and throughput
+                if self.scan_stats["start_time"]:
+                    elapsed_time = (datetime.utcnow() - self.scan_stats["start_time"]).total_seconds()
+                    if elapsed_time > 0:
+                        throughput = processed_count / elapsed_time * 60  # IPs per minute
+                        remaining_ips = total_count - processed_count
+                        eta_minutes = (remaining_ips / (throughput / 60)) if throughput > 0 else 0
+                        eta_hours = eta_minutes / 60
+                        
+                        self.logger.info(f"📊 Progress: {processed_count}/{total_count} IPs ({progress_percent:.1f}%)")
+                        self.logger.info(f"⚡ Throughput: {throughput:.1f} IPs/min | ETA: {eta_hours:.1f}h")
+                    else:
+                        self.logger.info(f"📊 Processed {processed_count}/{total_count} IPs ({progress_percent:.1f}%)")
+                else:
+                    self.logger.info(f"📊 Processed {processed_count}/{total_count} IPs")
         
         finally:
             await self.credential_validator.close()
@@ -465,12 +498,24 @@ class K8sUltimateScanner:
                 delay = time.random() * (self.config.stealth_delays[1] - self.config.stealth_delays[0]) + self.config.stealth_delays[0]
                 await asyncio.sleep(delay)
             
-            # Scan all K8s ports for this IP
-            for port in self.k8s_ports:
-                result = await self._scan_port(ip, port)
-                if result:
-                    self.scan_stats["scanned_ips"] += 1
-                    return result
+            # Parallel port scanning optimization
+            if self.config.mode == ScanMode.TURBO:
+                # Scan all ports in parallel for maximum speed
+                tasks = [self._scan_port(ip, port) for port in self.k8s_ports]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Return first successful result
+                for result in results:
+                    if isinstance(result, ScanResult):
+                        self.scan_stats["scanned_ips"] += 1
+                        return result
+            else:
+                # Sequential scanning for other modes (maintains backward compatibility)
+                for port in self.k8s_ports:
+                    result = await self._scan_port(ip, port)
+                    if result:
+                        self.scan_stats["scanned_ips"] += 1
+                        return result
             
             return None
     
@@ -479,13 +524,27 @@ class K8sUltimateScanner:
         start_time = time.time()
         
         try:
-            connector = aiohttp.TCPConnector(
-                ssl=False,
-                limit=100,
-                limit_per_host=30
-            )
-            
-            timeout = aiohttp.ClientTimeout(total=self.config.timeout)
+            # Optimize connector settings based on scan mode
+            if self.config.mode == ScanMode.TURBO:
+                connector = aiohttp.TCPConnector(
+                    ssl=False,
+                    limit=self.config.turbo_connector_limit,          # 5000 total connections
+                    limit_per_host=self.config.turbo_connector_limit_per_host,  # 1000 per host
+                    ttl_dns_cache=300,
+                    use_dns_cache=True,
+                    enable_cleanup_closed=True
+                )
+                timeout = aiohttp.ClientTimeout(total=self.config.turbo_timeout)
+            else:
+                # Enhanced settings for non-turbo modes
+                connector = aiohttp.TCPConnector(
+                    ssl=False,
+                    limit=1000,
+                    limit_per_host=200,
+                    ttl_dns_cache=300,
+                    use_dns_cache=True
+                )
+                timeout = aiohttp.ClientTimeout(total=self.config.timeout)
             
             async with aiohttp.ClientSession(
                 connector=connector,
@@ -517,19 +576,27 @@ class K8sUltimateScanner:
                                         response_time=response_time
                                     )
                                     
-                                    # Extract version and vulnerabilities
+                                    # Extract version and vulnerabilities - skip vuln checks in turbo mode for speed
                                     result.version = self._extract_version(content, response.headers)
-                                    result.vulnerabilities = await self._check_vulnerabilities(session, endpoint)
+                                    if self.config.mode != ScanMode.TURBO:
+                                        result.vulnerabilities = await self._check_vulnerabilities(session, endpoint)
+                                    else:
+                                        result.vulnerabilities = []  # Skip vuln checks in turbo mode
                                     
                                     # Extract credentials
                                     credentials = await self._extract_credentials(content, ip, port)
                                     
-                                    # Validate credentials if enabled
-                                    if self.config.validation_type != ValidationType.NONE:
+                                    # Validate credentials if enabled - skip in turbo mode for performance
+                                    if self.config.validation_type != ValidationType.NONE and self.config.mode != ScanMode.TURBO:
                                         for cred in credentials:
                                             validation_result = await self.credential_validator.validate_credential(cred)
                                             cred.validated = validation_result.get("validated", False)
                                             cred.validation_result = validation_result
+                                    elif self.config.mode == ScanMode.TURBO:
+                                        # In turbo mode, mark all credentials as unvalidated for speed
+                                        for cred in credentials:
+                                            cred.validated = False
+                                            cred.validation_result = {"turbo_mode": "validation_skipped"}
                                     
                                     result.credentials = credentials
                                     self.scan_stats["found_services"] += 1
@@ -699,7 +766,7 @@ async def main():
     
     parser = argparse.ArgumentParser(description="K8s Ultimate Scanner")
     parser.add_argument("--targets", "-t", required=True, help="Comma-separated targets or file path")
-    parser.add_argument("--mode", "-m", choices=["stealth", "balanced", "aggressive", "ultimate"], default="balanced")
+    parser.add_argument("--mode", "-m", choices=["stealth", "balanced", "aggressive", "ultimate", "turbo"], default="balanced")
     parser.add_argument("--concurrent", "-c", type=int, default=100, help="Max concurrent workers")
     parser.add_argument("--timeout", type=int, default=15, help="Timeout per request")
     parser.add_argument("--validate", action="store_true", help="Enable credential validation")
