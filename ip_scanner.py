@@ -41,15 +41,25 @@ class PortScanConfig:
 class IPScanner:
     """High-performance IP scanner with AWS service detection"""
     
-    def __init__(self, max_concurrent: int = 1000, timeout: float = 3.0, stealth_mode: bool = True):
+    def __init__(self, max_concurrent: int = 1000, timeout: float = 3.0, stealth_mode: bool = True, lightning_mode: bool = False):
         self.max_concurrent = max_concurrent
         self.timeout = timeout
         self.stealth_mode = stealth_mode
+        self.lightning_mode = lightning_mode
+        
+        # Lightning mode optimizations
+        if lightning_mode:
+            self.max_concurrent = min(max_concurrent, 20000)
+            self.timeout = min(timeout, 1.0)
+            self.stealth_mode = False
         
         # Port configurations
-        self.port_config = PortScanConfig(
-            common_ports=[21, 22, 23, 25, 53, 80, 110, 143, 443, 993, 995],
-            aws_ports=[
+        if lightning_mode:
+            # Lightning mode: only critical K8s ports
+            aws_ports = [6443, 8443, 10250]
+        else:
+            # Full port list for thorough scanning
+            aws_ports = [
                 # EC2/IMDS
                 80, 443, 
                 # Kubernetes/EKS
@@ -70,7 +80,11 @@ class IPScanner:
                 3000,       # Grafana
                 9090,       # Prometheus
                 8080, 8081, 8082, 8083, 8084, 8085  # Various web services
-            ],
+            ]
+        
+        self.port_config = PortScanConfig(
+            common_ports=[21, 22, 23, 25, 53, 80, 110, 143, 443, 993, 995] if not lightning_mode else [80, 443],
+            aws_ports=aws_ports,
             timeout=timeout,
             max_concurrent=max_concurrent,
             stealth_mode=stealth_mode

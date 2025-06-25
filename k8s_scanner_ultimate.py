@@ -23,6 +23,9 @@ import base64
 import re
 import logging
 import pickle
+import socket
+import struct
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Any
@@ -35,12 +38,49 @@ import xml.etree.ElementTree as ET
 # Enhanced Security and Credential Detection
 from enhanced_security_monitor import EnhancedCredentialDetector, CredentialType, FilterConfig
 
+class LightningSynScanner:
+    """Ultra-fast SYN scanner for port discovery"""
+    
+    def __init__(self, timeout: float = 0.5):
+        self.timeout = timeout
+        self.open_ports_cache = {}
+    
+    async def syn_scan_port(self, ip: str, port: int) -> bool:
+        """Use raw socket SYN scan for ultra-fast port discovery"""
+        try:
+            # Use connect() with non-blocking socket for SYN-like behavior
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(self.timeout)
+            result = sock.connect_ex((ip, port))
+            sock.close()
+            return result == 0
+        except Exception:
+            return False
+    
+    async def lightning_scan_ip(self, ip: str, ports: List[int]) -> List[int]:
+        """SYN scan all ports for an IP in parallel"""
+        tasks = []
+        for port in ports:
+            task = asyncio.create_task(self.syn_scan_port(ip, port))
+            tasks.append((port, task))
+        
+        open_ports = []
+        for port, task in tasks:
+            try:
+                if await task:
+                    open_ports.append(port)
+            except Exception:
+                continue
+        
+        return open_ports
+
 class ScanMode(Enum):
     """Scanning modes with different intensity levels"""
     STEALTH = "stealth"
     BALANCED = "balanced"
     AGGRESSIVE = "aggressive"
     ULTIMATE = "ultimate"
+    LIGHTNING = "lightning"  # Ultra-fast mode for 6-minute scans
 
 class ValidationType(Enum):
     """Types of credential validation"""
@@ -64,6 +104,46 @@ class ScannerConfig:
     user_agents: List[str] = field(default_factory=list)
     proxy_config: Optional[Dict] = None
     rate_limit_per_second: int = 50
+    # Lightning mode specific settings
+    lightning_ports: List[int] = field(default_factory=lambda: [6443, 8443, 10250])
+    syn_scan_first: bool = False
+    connection_pool_size: int = 1000
+    batch_size: int = 100
+    max_parallel_batches: int = 10
+    
+    @classmethod
+    def get_lightning_config(cls):
+        """Get optimized configuration for lightning mode"""
+        return cls(
+            mode=ScanMode.LIGHTNING,
+            max_concurrent=50000,  # Even higher concurrency
+            timeout=0.3,  # Even faster timeout
+            validation_type=ValidationType.NONE,  # Skip validation
+            enable_checkpoint=False,  # No checkpoints
+            rate_limit_per_second=50000,  # No rate limiting
+            lightning_ports=[6443, 8443, 10250],  # Critical ports only
+            syn_scan_first=True,
+            connection_pool_size=20000,
+            batch_size=25,  # Smaller batches for faster response
+            max_parallel_batches=100  # More parallel batches
+        )
+    
+    @classmethod
+    def get_hyper_lightning_config(cls):
+        """Get hyper-optimized configuration for maximum speed"""
+        return cls(
+            mode=ScanMode.LIGHTNING,
+            max_concurrent=100000,  # Push system limits
+            timeout=0.2,  # Extremely fast timeout
+            validation_type=ValidationType.NONE,
+            enable_checkpoint=False,
+            rate_limit_per_second=100000,
+            lightning_ports=[6443, 8443, 10250],
+            syn_scan_first=True,
+            connection_pool_size=50000,
+            batch_size=15,  # Very small batches
+            max_parallel_batches=200  # Maximum parallelism
+        )
 
 @dataclass
 class CredentialMatch:
@@ -277,7 +357,18 @@ class K8sUltimateScanner:
         self.logger = self._setup_logging()
         self.credential_detector = self._setup_credential_detector()
         self.credential_validator = AdvancedCredentialValidator()
-        self.checkpoint_manager = CheckpointManager(config.session_id, config.output_dir / "checkpoints")
+        
+        # Skip checkpoint manager for lightning mode
+        if config.mode != ScanMode.LIGHTNING:
+            self.checkpoint_manager = CheckpointManager(config.session_id, config.output_dir / "checkpoints")
+        else:
+            self.checkpoint_manager = None
+        
+        # Initialize SYN scanner for lightning mode
+        if config.mode == ScanMode.LIGHTNING:
+            self.syn_scanner = LightningSynScanner(timeout=0.5)
+        else:
+            self.syn_scanner = None
         
         # Scanning state
         self.scan_results: List[ScanResult] = []
@@ -292,8 +383,11 @@ class K8sUltimateScanner:
             "end_time": None
         }
         
-        # K8s specific ports and endpoints
-        self.k8s_ports = [6443, 8443, 443, 80, 8080, 8001, 8888, 9443, 10250, 10251, 10252, 2379, 2380]
+        # K8s specific ports - use lightning ports for lightning mode
+        if config.mode == ScanMode.LIGHTNING:
+            self.k8s_ports = config.lightning_ports
+        else:
+            self.k8s_ports = [6443, 8443, 443, 80, 8080, 8001, 8888, 9443, 10250, 10251, 10252, 2379, 2380]
         self.metadata_endpoints = [
             "http://169.254.169.254/latest/meta-data/",  # AWS
             "http://metadata.google.internal/computeMetadata/v1/",  # GCP
@@ -360,16 +454,22 @@ class K8sUltimateScanner:
         self.scan_stats["total_ips"] = len(expanded_ips)
         self.scan_stats["start_time"] = datetime.utcnow()
         
-        # Load checkpoint if available
-        checkpoint_data = self.checkpoint_manager.load_checkpoint()
-        if checkpoint_data and self.config.enable_checkpoint:
-            self.logger.info("📂 Loading previous checkpoint")
-            self.processed_ips = checkpoint_data["processed_ips"]
-            self.scan_results = checkpoint_data["scan_results"]
-            
-            # Remove already processed IPs
-            expanded_ips = [ip for ip in expanded_ips if ip not in self.processed_ips]
-            self.logger.info(f"🔄 Resuming scan with {len(expanded_ips)} remaining IPs")
+        # Lightning mode uses different scanning approach
+        if self.config.mode == ScanMode.LIGHTNING:
+            return await self._lightning_scan(expanded_ips)
+        
+        # Load checkpoint if available (skip for lightning mode)
+        checkpoint_data = None
+        if self.checkpoint_manager and self.config.enable_checkpoint:
+            checkpoint_data = self.checkpoint_manager.load_checkpoint()
+            if checkpoint_data:
+                self.logger.info("📂 Loading previous checkpoint")
+                self.processed_ips = checkpoint_data["processed_ips"]
+                self.scan_results = checkpoint_data["scan_results"]
+                
+                # Remove already processed IPs
+                expanded_ips = [ip for ip in expanded_ips if ip not in self.processed_ips]
+                self.logger.info(f"🔄 Resuming scan with {len(expanded_ips)} remaining IPs")
         
         # Initialize credential validator
         await self.credential_validator.initialize()
@@ -416,10 +516,152 @@ class K8sUltimateScanner:
             await self._generate_reports()
             
             # Clean up checkpoint on successful completion
-            if self.config.enable_checkpoint:
+            if self.config.enable_checkpoint and self.checkpoint_manager:
                 self.checkpoint_manager.cleanup_checkpoint()
         
         return self.scan_results
+    
+    async def _lightning_scan(self, ips: List[str]) -> List[ScanResult]:
+        """Ultra-fast lightning scan implementation"""
+        self.logger.info(f"⚡ Starting LIGHTNING scan on {len(ips)} IPs")
+        self.logger.info(f"🎯 Scanning ports: {self.k8s_ports}")
+        self.logger.info(f"🚀 Max concurrent: {self.config.max_concurrent}")
+        
+        # Split IPs into batches for parallel processing
+        batch_size = self.config.batch_size
+        batches = [ips[i:i + batch_size] for i in range(0, len(ips), batch_size)]
+        
+        # Process batches in parallel
+        semaphore = asyncio.Semaphore(self.config.max_parallel_batches)
+        batch_tasks = [
+            self._lightning_scan_batch(semaphore, batch)
+            for batch in batches
+        ]
+        
+        batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+        
+        # Flatten results
+        for batch_result in batch_results:
+            if isinstance(batch_result, list):
+                self.scan_results.extend(batch_result)
+            elif isinstance(batch_result, Exception):
+                self.logger.error(f"Batch error: {batch_result}")
+        
+        self.scan_stats["end_time"] = datetime.utcnow()
+        duration = (self.scan_stats["end_time"] - self.scan_stats["start_time"]).total_seconds()
+        rate = len(ips) / duration if duration > 0 else 0
+        
+        self.logger.info(f"⚡ Lightning scan complete: {len(ips)} IPs in {duration:.1f}s ({rate:.1f} IPs/sec)")
+        self.logger.info(f"🎯 Found {len(self.scan_results)} K8s services")
+        
+        return self.scan_results
+    
+    async def _lightning_scan_batch(self, semaphore: asyncio.Semaphore, ip_batch: List[str]) -> List[ScanResult]:
+        """Scan a batch of IPs in parallel"""
+        async with semaphore:
+            # First do SYN scan to find open ports
+            syn_tasks = []
+            for ip in ip_batch:
+                task = self.syn_scanner.lightning_scan_ip(ip, self.k8s_ports)
+                syn_tasks.append((ip, task))
+            
+            # Collect IPs with open ports
+            ip_port_pairs = []
+            for ip, task in syn_tasks:
+                try:
+                    open_ports = await task
+                    for port in open_ports:
+                        ip_port_pairs.append((ip, port))
+                except Exception:
+                    continue
+            
+            # Only do HTTP requests on confirmed open ports
+            if not ip_port_pairs:
+                return []
+            
+            # Create HTTP scanning tasks with extreme concurrency
+            http_semaphore = asyncio.Semaphore(min(len(ip_port_pairs), 1000))
+            http_tasks = [
+                self._lightning_scan_port(http_semaphore, ip, port)
+                for ip, port in ip_port_pairs
+            ]
+            
+            results = await asyncio.gather(*http_tasks, return_exceptions=True)
+            
+            # Filter successful results
+            batch_results = []
+            for result in results:
+                if isinstance(result, ScanResult):
+                    batch_results.append(result)
+                    self.scan_stats["found_services"] += 1
+            
+            return batch_results
+    
+    async def _lightning_scan_port(self, semaphore: asyncio.Semaphore, ip: str, port: int) -> Optional[ScanResult]:
+        """Lightning-fast port scan with minimal overhead"""
+        async with semaphore:
+            start_time = time.time()
+            
+            try:
+                # Ultra-high performance connector
+                connector = aiohttp.TCPConnector(
+                    ssl=False,
+                    limit=self.config.connection_pool_size,
+                    limit_per_host=5000,
+                    ttl_dns_cache=300,
+                    use_dns_cache=True,
+                    enable_cleanup_closed=True,
+                    keepalive_timeout=1,
+                    force_close=True
+                )
+                
+                timeout = aiohttp.ClientTimeout(total=self.config.timeout)
+                
+                async with aiohttp.ClientSession(
+                    connector=connector,
+                    timeout=timeout
+                ) as session:
+                    
+                    # Try HTTPS first for K8s API ports, HTTP for others
+                    protocols = ['https', 'http'] if port in [6443, 8443] else ['http', 'https']
+                    
+                    for protocol in protocols:
+                        endpoint = f"{protocol}://{ip}:{port}"
+                        
+                        headers = {
+                            "User-Agent": "kubectl/v1.24.0",
+                            "Accept": "application/json",
+                            "Connection": "close"
+                        }
+                        
+                        try:
+                            async with session.get(endpoint, headers=headers) as response:
+                                if response.status in [200, 401, 403, 404]:
+                                    response_time = time.time() - start_time
+                                    
+                                    # Fast K8s detection - only check headers for speed
+                                    server_header = response.headers.get('Server', '').lower()
+                                    if any(k8s_indicator in server_header for k8s_indicator in 
+                                          ['kubernetes', 'k8s', 'kube', 'apiserver']):
+                                        
+                                        result = ScanResult(
+                                            target_ip=ip,
+                                            port=port,
+                                            service="kubernetes",
+                                            response_time=response_time
+                                        )
+                                        
+                                        # Skip detailed analysis in lightning mode for speed
+                                        self.scan_stats["scanned_ips"] += 1
+                                        return result
+                        
+                        except Exception:
+                            continue
+            
+            except Exception:
+                pass
+            
+            return None
     
     async def _expand_targets(self, targets: List[str]) -> List[str]:
         """Expand CIDR ranges and hostnames to individual IPs"""
@@ -460,7 +702,7 @@ class K8sUltimateScanner:
     async def _scan_single_target(self, semaphore: asyncio.Semaphore, ip: str) -> Optional[ScanResult]:
         """Scan a single IP target"""
         async with semaphore:
-            # Apply rate limiting
+            # Apply rate limiting only for stealth mode, skip for lightning
             if self.config.mode == ScanMode.STEALTH:
                 delay = time.random() * (self.config.stealth_delays[1] - self.config.stealth_delays[0]) + self.config.stealth_delays[0]
                 await asyncio.sleep(delay)
@@ -479,11 +721,24 @@ class K8sUltimateScanner:
         start_time = time.time()
         
         try:
-            connector = aiohttp.TCPConnector(
-                ssl=False,
-                limit=100,
-                limit_per_host=30
-            )
+            # Use optimized connector settings based on mode
+            if self.config.mode == ScanMode.LIGHTNING:
+                connector = aiohttp.TCPConnector(
+                    ssl=False,
+                    limit=20000,
+                    limit_per_host=5000,
+                    ttl_dns_cache=300,
+                    use_dns_cache=True,
+                    enable_cleanup_closed=True,
+                    keepalive_timeout=1,
+                    force_close=True
+                )
+            else:
+                connector = aiohttp.TCPConnector(
+                    ssl=False,
+                    limit=1000,
+                    limit_per_host=100
+                )
             
             timeout = aiohttp.ClientTimeout(total=self.config.timeout)
             
@@ -699,11 +954,13 @@ async def main():
     
     parser = argparse.ArgumentParser(description="K8s Ultimate Scanner")
     parser.add_argument("--targets", "-t", required=True, help="Comma-separated targets or file path")
-    parser.add_argument("--mode", "-m", choices=["stealth", "balanced", "aggressive", "ultimate"], default="balanced")
+    parser.add_argument("--mode", "-m", choices=["stealth", "balanced", "aggressive", "ultimate", "lightning"], default="balanced")
     parser.add_argument("--concurrent", "-c", type=int, default=100, help="Max concurrent workers")
     parser.add_argument("--timeout", type=int, default=15, help="Timeout per request")
     parser.add_argument("--validate", action="store_true", help="Enable credential validation")
     parser.add_argument("--output", "-o", default="./results", help="Output directory")
+    parser.add_argument("--lightning", action="store_true", help="Use lightning mode for ultra-fast scanning")
+    parser.add_argument("--hyper", action="store_true", help="Use hyper-lightning mode for maximum speed")
     
     args = parser.parse_args()
     
@@ -715,22 +972,49 @@ async def main():
         targets = [t.strip() for t in args.targets.split(',')]
     
     # Configure scanner
-    config = ScannerConfig(
-        mode=ScanMode(args.mode),
-        max_concurrent=args.concurrent,
-        timeout=args.timeout,
-        validation_type=ValidationType.COMPREHENSIVE if args.validate else ValidationType.BASIC,
-        output_dir=Path(args.output)
-    )
+    if args.hyper:
+        config = ScannerConfig.get_hyper_lightning_config()
+        config.output_dir = Path(args.output)
+        print("🚀 HYPER-LIGHTNING MODE ENABLED - Maximum performance scanning")
+        print(f"⚡ Concurrency: {config.max_concurrent}, Timeout: {config.timeout}s")
+        print(f"🎯 Ports: {config.lightning_ports}")
+    elif args.lightning or args.mode == "lightning":
+        config = ScannerConfig.get_lightning_config()
+        config.output_dir = Path(args.output)
+        print("⚡ LIGHTNING MODE ENABLED - Ultra-fast scanning with minimal validation")
+        print(f"🚀 Concurrency: {config.max_concurrent}, Timeout: {config.timeout}s")
+        print(f"🎯 Ports: {config.lightning_ports}")
+    else:
+        config = ScannerConfig(
+            mode=ScanMode(args.mode),
+            max_concurrent=args.concurrent,
+            timeout=args.timeout,
+            validation_type=ValidationType.COMPREHENSIVE if args.validate else ValidationType.BASIC,
+            output_dir=Path(args.output)
+        )
     
     # Run scan
     scanner = K8sUltimateScanner(config)
+    start_time = time.time()
     results = await scanner.scan_targets(targets)
+    duration = time.time() - start_time
+    
+    # Performance stats
+    total_ips = len(targets) if isinstance(targets[0], str) and '/' not in targets[0] else scanner.scan_stats.get("total_ips", 0)
+    rate = total_ips / duration if duration > 0 else 0
     
     print(f"\n🎯 Scan completed!")
-    print(f"📊 Found {len(results)} services")
+    print(f"⏱️ Duration: {duration:.1f} seconds")
+    print(f"📊 Rate: {rate:.1f} IPs/second")
+    print(f"🔍 Found {len(results)} services")
     print(f"🔑 Found {sum(len(r.credentials) for r in results)} credentials")
-    print(f"✅ Validated {sum(len([c for c in r.credentials if c.validated]) for r in results)} credentials")
+    if config.validation_type != ValidationType.NONE:
+        print(f"✅ Validated {sum(len([c for c in r.credentials if c.validated]) for r in results)} credentials")
+
+async def create_lightning_scanner() -> K8sUltimateScanner:
+    """Create a lightning-mode scanner for maximum performance"""
+    config = ScannerConfig.get_lightning_config()
+    return K8sUltimateScanner(config)
 
 if __name__ == "__main__":
     asyncio.run(main())
