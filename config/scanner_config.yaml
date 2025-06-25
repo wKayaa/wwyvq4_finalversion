@@ -1,0 +1,369 @@
+# Scanner Configuration for K8s Ultimate Scanner
+# Author: wKayaa
+# Date: 2025-01-17
+
+# Global Settings
+scanner:
+  name: "K8s Ultimate Scanner v1.0"
+  version: "1.0.0"
+  author: "wKayaa"
+  description: "Enterprise-grade Kubernetes security scanner"
+
+# Scanning Configuration
+scanning:
+  # Default scanning mode (stealth, balanced, aggressive, ultimate)
+  default_mode: "balanced"
+  
+  # Concurrency settings
+  max_concurrent_workers: 100
+  max_concurrent_per_host: 5
+  
+  # Timeout settings (seconds)
+  connection_timeout: 10
+  read_timeout: 15
+  total_timeout: 30
+  
+  # Rate limiting
+  requests_per_second: 50
+  burst_limit: 100
+  
+  # Stealth mode settings
+  stealth:
+    min_delay: 0.5
+    max_delay: 2.0
+    randomize_user_agents: true
+    randomize_headers: true
+  
+  # Target expansion limits
+  max_cidr_expansion: 65536  # Maximum IPs to expand from CIDR
+  max_host_resolution: 1000  # Maximum hosts to resolve
+
+# Kubernetes Detection
+kubernetes:
+  # Ports to scan for K8s services
+  ports:
+    - 6443    # API Server (HTTPS)
+    - 8443    # API Server (HTTPS alternate)
+    - 443     # HTTPS
+    - 80      # HTTP
+    - 8080    # HTTP alternate
+    - 8001    # kubectl proxy
+    - 8888    # Dashboard
+    - 9443    # Webhook
+    - 10250   # Kubelet API
+    - 10251   # kube-scheduler
+    - 10252   # kube-controller-manager
+    - 2379    # etcd client
+    - 2380    # etcd peer
+  
+  # Detection patterns
+  indicators:
+    - "kubernetes"
+    - "k8s"
+    - "apiVersion"
+    - "unauthorized"
+    - "forbidden"
+    - "kube-apiserver"
+    - "etcd"
+    - "kubelet"
+    - "cluster-admin"
+    - "kube-system"
+    - "default-token"
+    - "serviceaccount"
+    - "Bearer"
+    - "kubectl"
+  
+  # API paths to check
+  api_paths:
+    - "/api"
+    - "/api/v1"
+    - "/apis"
+    - "/openapi/v2"
+    - "/version"
+    - "/api/v1/namespaces"
+    - "/api/v1/nodes"
+    - "/api/v1/pods"
+    - "/healthz"
+    - "/metrics"
+    - "/stats/summary"
+  
+  # Cloud provider metadata endpoints
+  metadata_endpoints:
+    aws:
+      - "http://169.254.169.254/latest/meta-data/"
+      - "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+      - "http://169.254.169.254/latest/user-data"
+    
+    gcp:
+      - "http://metadata.google.internal/computeMetadata/v1/"
+      - "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+      - "http://metadata.google.internal/computeMetadata/v1/project/project-id"
+    
+    azure:
+      - "http://169.254.169.254/metadata/instance"
+      - "http://169.254.169.254/metadata/identity/oauth2/token"
+
+# Credential Detection
+credentials:
+  # Enable credential extraction
+  enabled: true
+  
+  # Validation settings
+  validation:
+    enabled: true
+    timeout: 30
+    cache_size: 1000
+    cache_ttl: 3600  # seconds
+  
+  # Credential patterns and confidence thresholds
+  patterns:
+    aws_access_key:
+      pattern: '\b(AKIA[0-9A-Z]{16})\b'
+      confidence_threshold: 90
+      validate: true
+    
+    aws_secret_key:
+      pattern: '\b([A-Za-z0-9+/]{40})\b'
+      confidence_threshold: 75
+      validate: true
+      requires_access_key: true
+    
+    sendgrid_api_key:
+      pattern: '\b(SG\.[a-zA-Z0-9_-]{22,}\.[a-zA-Z0-9_-]{43,})\b'
+      confidence_threshold: 95
+      validate: true
+    
+    mailgun_api_key:
+      pattern: '\bkey-[a-f0-9]{32}\b'
+      confidence_threshold: 90
+      validate: true
+    
+    github_token:
+      pattern: '\b(ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|ghu_[a-zA-Z0-9]{36}|ghs_[a-zA-Z0-9]{36}|ghr_[a-zA-Z0-9]{36})\b'
+      confidence_threshold: 95
+      validate: true
+    
+    gitlab_token:
+      pattern: '\b(glpat-[a-zA-Z0-9_-]{20})\b'
+      confidence_threshold: 95
+      validate: true
+    
+    jwt_token:
+      pattern: '\b(eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*)\b'
+      confidence_threshold: 80
+      validate: true
+    
+    bearer_token:
+      pattern: 'Bearer\s+([A-Za-z0-9_-]{20,})'
+      confidence_threshold: 70
+      validate: true
+    
+    database_url:
+      pattern: '\b((?:mysql|postgresql|mongodb|redis)://[^\s]+)\b'
+      confidence_threshold: 85
+      validate: false
+    
+    smtp_credentials:
+      pattern: '\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}:[^@\s]+)\b'
+      confidence_threshold: 80
+      validate: false
+  
+  # Context analysis
+  context:
+    proximity_distance: 200  # characters to analyze around match
+    boost_keywords:
+      - "password"
+      - "secret"
+      - "key"
+      - "token"
+      - "credential"
+      - "auth"
+      - "api"
+    
+    penalty_keywords:
+      - "example"
+      - "test"
+      - "demo"
+      - "sample"
+      - "placeholder"
+      - "fake"
+
+# Vulnerability Detection
+vulnerabilities:
+  enabled: true
+  
+  # CVE checks
+  cves:
+    - "CVE-2019-11247"  # Kubernetes API Server privilege escalation
+    - "CVE-2019-11249"  # Kubernetes kubectl cp symlink vulnerability
+    - "CVE-2020-8555"   # Server Side Request Forgery
+    - "CVE-2020-8558"   # Node setting allows for neighboring hosts to bypass localhost boundary
+    - "CVE-2021-25741"  # Symlink Exchange Can Allow Host Filesystem Access
+    - "CVE-2022-0185"   # Linux kernel vulnerability affecting containers
+    - "CVE-2023-2727"   # Kubernetes Image Volume Vulnerability
+    - "CVE-2023-2728"   # Kubernetes Bypassing mountable secrets policy
+  
+  # Common misconfigurations
+  misconfigurations:
+    - "anonymous_api_access"
+    - "exposed_metrics"
+    - "exposed_kubelet_stats"
+    - "default_service_account"
+    - "privileged_containers"
+    - "host_network_access"
+    - "unencrypted_etcd"
+    - "weak_rbac_policies"
+
+# User Agents for stealth scanning
+user_agents:
+  - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+  - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+  - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+  - "Mozilla/5.0 (compatible; Kubernetes-Health-Check/1.0)"
+  - "kubectl/v1.24.0"
+  - "kube-probe/1.0"
+  - "Mozilla/5.0 (compatible; F8S-Scanner/2.0)"
+  - "kube-apiserver-admission-patch"
+
+# Checkpoint Management
+checkpoint:
+  enabled: true
+  save_interval: 100        # Save every N processed targets
+  time_interval: 300        # Save every N seconds
+  compression: true         # Enable gzip compression
+  max_checkpoints: 5        # Keep max N checkpoint files
+  cleanup_age_days: 7       # Remove checkpoints older than N days
+
+# Output Configuration
+output:
+  directory: "./results"
+  
+  formats:
+    json:
+      enabled: true
+      pretty_print: true
+      include_metadata: true
+    
+    csv:
+      enabled: true
+      include_headers: true
+      delimiter: ","
+    
+    xml:
+      enabled: false
+      root_element: "scan_results"
+    
+    yaml:
+      enabled: false
+      flow_style: false
+  
+  # Credential output settings
+  credentials:
+    redact_values: true       # Partially redact credential values
+    redact_length: 8          # Show first/last N characters
+    include_context: true     # Include surrounding context
+    validate_before_save: true
+
+# Proxy Configuration
+proxy:
+  enabled: false
+  
+  # Proxy rotation
+  rotation:
+    enabled: false
+    rotate_interval: 100    # Switch proxy every N requests
+  
+  # Proxy list (examples - configure your own)
+  proxies:
+    - type: "http"
+      host: "127.0.0.1"
+      port: 8080
+      username: null
+      password: null
+    
+    - type: "socks5"
+      host: "127.0.0.1"
+      port: 9050
+      username: null
+      password: null
+
+# Logging Configuration
+logging:
+  level: "INFO"              # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  files:
+    enabled: true
+    directory: "./logs"
+    max_size_mb: 100
+    backup_count: 5
+    rotation: "time"         # time or size
+  
+  console:
+    enabled: true
+    colored: true
+
+# Performance Tuning
+performance:
+  # Memory management
+  memory:
+    max_results_in_memory: 10000
+    batch_size: 1000
+    garbage_collection_interval: 5000
+  
+  # Network optimization
+  network:
+    keep_alive: true
+    connection_pool_size: 100
+    dns_cache_ttl: 300
+    tcp_nodelay: true
+  
+  # Processing optimization
+  processing:
+    worker_threads: null      # null = auto-detect (CPU cores)
+    queue_size: 1000
+    batch_processing: true
+
+# Security Settings
+security:
+  # SSL/TLS verification
+  ssl_verify: false          # Set to true in production
+  ssl_cert_path: null        # Path to custom CA bundle
+  
+  # Request headers
+  headers:
+    remove_sensitive: true   # Remove sensitive headers from logs
+    custom_headers: {}       # Custom headers to add to all requests
+  
+  # Operational security
+  opsec:
+    randomize_scan_order: true
+    vary_request_timing: true
+    avoid_detection_patterns: true
+
+# Notification Configuration
+notifications:
+  enabled: false
+  
+  telegram:
+    enabled: false
+    bot_token: null
+    chat_id: null
+    rate_limit: 5            # messages per minute
+  
+  discord:
+    enabled: false
+    webhook_url: null
+    rate_limit: 5
+  
+  webhook:
+    enabled: false
+    url: null
+    method: "POST"
+    headers: {}
+    
+  # Notification triggers
+  triggers:
+    high_value_credentials: true
+    successful_exploitation: true
+    error_threshold: 100     # notify after N errors
