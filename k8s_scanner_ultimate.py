@@ -576,9 +576,12 @@ class K8sUltimateScanner:
                                         response_time=response_time
                                     )
                                     
-                                    # Extract version and vulnerabilities
+                                    # Extract version and vulnerabilities - skip vuln checks in turbo mode for speed
                                     result.version = self._extract_version(content, response.headers)
-                                    result.vulnerabilities = await self._check_vulnerabilities(session, endpoint)
+                                    if self.config.mode != ScanMode.TURBO:
+                                        result.vulnerabilities = await self._check_vulnerabilities(session, endpoint)
+                                    else:
+                                        result.vulnerabilities = []  # Skip vuln checks in turbo mode
                                     
                                     # Extract credentials
                                     credentials = await self._extract_credentials(content, ip, port)
