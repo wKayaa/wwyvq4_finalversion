@@ -1,0 +1,213 @@
+---
+# ═══════════════════════════════════════════════════════════════════════════════
+# 🚀 WWYVQ Large Scale Configuration - 16M+ Targets Support
+# Author: wKayaa
+# Date: 2025-01-17
+# 
+# Optimized configuration for processing 16+ million targets efficiently
+# ═══════════════════════════════════════════════════════════════════════════════
+
+system:
+  # Core performance settings for massive scale
+  max_concurrent_threads: 10000
+  max_concurrent_clusters: 5000
+  timeout_per_operation: 10  # Reduced for faster processing
+  connection_pool_size: 2000
+  dns_cache_ttl: 3600
+  
+  # Memory management
+  memory_limit_gb: 16
+  max_memory_per_batch: 2048  # MB
+  gc_threshold: 1000  # Objects before garbage collection
+  
+  # Batch processing
+  batch_size: 10000
+  batch_processing_delay: 0.1  # Seconds between batches
+  max_batches_in_memory: 5
+  
+  # Rate limiting
+  requests_per_second: 1000
+  burst_allowance: 2000
+  adaptive_rate_limiting: true
+  
+network:
+  # Connection optimization
+  tcp_connector_limit: 10000
+  tcp_connector_limit_per_host: 50
+  tcp_keepalive_timeout: 60
+  enable_cleanup_closed: true
+  force_close_connections: false  # Use keepalive for performance
+  
+  # DNS optimization
+  use_dns_cache: true
+  dns_cache_size: 10000
+  resolve_timeout: 5
+  
+  # SSL/TLS optimization
+  ssl_verify: false
+  ssl_context_reuse: true
+  
+  # Retry configuration
+  max_retries: 2
+  retry_delay: 0.5
+  exponential_backoff: true
+
+scanning:
+  # K8s Ultimate Scanner settings
+  mode: "ultimate"
+  stealth_mode: false  # Disabled for maximum speed
+  validation_type: "basic"  # Faster validation
+  
+  # Port scanning optimization
+  common_ports: [6443, 8443, 443, 80, 8080, 8001, 10250, 2379, 2380]
+  port_timeout: 3
+  skip_port_validation: false
+  
+  # Credential extraction
+  extract_secrets: true
+  extract_tokens: true
+  extract_certificates: true
+  validate_credentials: true
+  
+  # Advanced scanning
+  deep_enumeration: false  # Disabled for speed
+  service_detection: true
+  version_detection: false  # Disabled for speed
+
+checkpointing:
+  # Checkpoint management for large scale
+  enable_checkpoints: true
+  checkpoint_interval: 5000  # Save every 5K processed targets
+  checkpoint_compression: true
+  auto_cleanup_old: true
+  max_checkpoint_age_days: 7
+  
+  # Recovery settings
+  auto_resume: true
+  resume_from_last_checkpoint: true
+  validate_checkpoint_integrity: true
+
+telegram:
+  # Rate limiting for Telegram notifications
+  enable_notifications: true
+  rate_limit_messages: true
+  max_messages_per_minute: 20
+  max_messages_per_hour: 200
+  
+  # Batch notifications
+  batch_notifications: true
+  batch_size: 100  # Credentials per batch notification
+  batch_interval: 300  # Seconds
+  
+  # Progress updates
+  progress_updates: true
+  progress_interval: 10000  # Every 10K targets
+  
+  # Alert filtering
+  only_validated_credentials: true
+  min_confidence_score: 0.7
+  group_similar_findings: true
+
+logging:
+  # Logging optimization
+  level: "INFO"
+  max_log_size_mb: 100
+  max_log_files: 10
+  disable_debug_logs: true
+  
+  # Performance logging
+  log_performance_metrics: true
+  metrics_interval: 60  # Seconds
+  
+statistics:
+  # Real-time statistics
+  enable_realtime_stats: true
+  stats_update_interval: 30  # Seconds
+  track_memory_usage: true
+  track_network_stats: true
+  track_error_rates: true
+  
+  # Dashboard updates
+  enable_dashboard: true
+  dashboard_port: 8090
+  dashboard_host: "0.0.0.0"
+
+output:
+  # Output optimization
+  output_directory: "./results_large_scale"
+  export_format: "json"
+  compress_results: true
+  split_large_files: true
+  max_file_size_mb: 500
+  
+  # Real-time export
+  enable_streaming_export: true
+  stream_interval: 1000  # Export every 1K results
+
+security:
+  # Security settings optimized for performance
+  validate_ssl: false
+  user_agent: "Mozilla/5.0 (compatible; WWYVQ-LargeScale/5.0)"
+  max_redirects: 2
+  
+  # Access control
+  enable_access_control: false  # Disabled for speed
+  require_authentication: false
+
+monitoring:
+  # System monitoring
+  enable_monitoring: true
+  monitor_cpu_usage: true
+  monitor_memory_usage: true
+  monitor_network_usage: true
+  monitor_disk_usage: true
+  
+  # Alerts
+  cpu_threshold_percent: 90
+  memory_threshold_percent: 85
+  network_error_threshold: 5  # Percent
+  
+  # Auto-scaling
+  enable_auto_scaling: true
+  scale_up_threshold: 80  # CPU/Memory %
+  scale_down_threshold: 30
+  max_scale_factor: 2.0
+
+advanced:
+  # Advanced performance settings
+  use_uvloop: true  # If available
+  optimize_gc: true
+  disable_warnings: true
+  
+  # Experimental features
+  enable_experimental_features: false
+  use_async_dns: true
+  parallel_credential_validation: true
+  
+  # Cleanup
+  cleanup_on_exit: true
+  cleanup_interval: 3600  # Seconds
+  
+# ═══════════════════════════════════════════════════════════════════════════════
+# System Requirements and Recommendations
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Recommended System Specifications:
+# - CPU: 16+ cores (32+ recommended)
+# - RAM: 32GB+ (64GB recommended)
+# - Network: 1Gbps+ bandwidth
+# - Storage: 1TB+ SSD for results and checkpoints
+# - OS: Linux (Ubuntu 20.04+ or CentOS 8+)
+
+# Required System Limits:
+# - ulimit -n 1000000  # File descriptors
+# - ulimit -u 32768    # Max user processes
+# - net.core.somaxconn = 65535
+# - net.ipv4.ip_local_port_range = 1024 65535
+# - vm.max_map_count = 262144
+
+# Docker Configuration (if using containers):
+# - --ulimit nofile=1000000:1000000
+# - --memory=32g
+# - --cpus=16
+# - --network=host (for best performance)

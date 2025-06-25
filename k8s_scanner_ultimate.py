@@ -64,6 +64,18 @@ class ScannerConfig:
     user_agents: List[str] = field(default_factory=list)
     proxy_config: Optional[Dict] = None
     rate_limit_per_second: int = 50
+    
+    # Large-scale performance optimizations
+    large_scale_mode: bool = False
+    max_concurrent_large_scale: int = 10000
+    batch_size: int = 10000
+    connection_pool_size: int = 2000
+    memory_limit_mb: int = 16384
+    enable_memory_monitoring: bool = True
+    enable_adaptive_rate_limiting: bool = True
+    tcp_keepalive_timeout: int = 60
+    dns_cache_size: int = 10000
+    max_retries: int = 2
 
 @dataclass
 class CredentialMatch:
@@ -90,6 +102,84 @@ class ScanResult:
     metadata: Dict[str, Any] = field(default_factory=dict)
     response_time: float = 0.0
     timestamp: datetime = field(default_factory=datetime.utcnow)
+
+class LargeScaleOptimizer:
+    """Optimizes scanner for large-scale operations (16M+ targets)"""
+    
+    def __init__(self, config: ScannerConfig):
+        self.config = config
+        self.memory_usage = 0
+        self.processed_count = 0
+        self.start_time = datetime.utcnow()
+        self.rate_limiter = None
+        
+    def optimize_config_for_scale(self, target_count: int) -> ScannerConfig:
+        """Automatically optimize configuration based on target count"""
+        if target_count > 1000000:  # 1M+ targets
+            self.config.large_scale_mode = True
+            self.config.max_concurrent = min(self.config.max_concurrent_large_scale, target_count // 1000)
+            self.config.batch_size = min(50000, target_count // 100)
+            self.config.checkpoint_interval = min(10000, target_count // 1000)
+            self.config.timeout = 8  # Faster timeout for large scale
+            self.config.stealth_delays = (0.01, 0.05)  # Reduce delays
+            
+        # Memory optimization
+        if target_count > 10000000:  # 10M+ targets
+            self.config.connection_pool_size = 5000
+            self.config.tcp_keepalive_timeout = 30
+            self.config.dns_cache_size = 50000
+            
+        return self.config
+    
+    async def create_optimized_session(self) -> aiohttp.ClientSession:
+        """Create optimized HTTP session for large-scale operations"""
+        connector = aiohttp.TCPConnector(
+            limit=self.config.connection_pool_size,
+            limit_per_host=min(100, self.config.connection_pool_size // 20),
+            ttl_dns_cache=self.config.tcp_keepalive_timeout,
+            use_dns_cache=True,
+            keepalive_timeout=self.config.tcp_keepalive_timeout,
+            enable_cleanup_closed=True,
+            ssl=False
+        )
+        
+        timeout = aiohttp.ClientTimeout(
+            total=self.config.timeout,
+            connect=self.config.timeout // 2
+        )
+        
+        return aiohttp.ClientSession(
+            connector=connector,
+            timeout=timeout,
+            raise_for_status=False
+        )
+    
+    def monitor_memory_usage(self) -> bool:
+        """Monitor memory usage and return True if within limits"""
+        try:
+            import psutil
+            process = psutil.Process()
+            memory_mb = process.memory_info().rss / 1024 / 1024
+            self.memory_usage = memory_mb
+            
+            if memory_mb > self.config.memory_limit_mb:
+                return False
+            return True
+        except ImportError:
+            return True  # If psutil not available, assume OK
+    
+    def get_performance_stats(self) -> Dict[str, Any]:
+        """Get real-time performance statistics"""
+        elapsed = (datetime.utcnow() - self.start_time).total_seconds()
+        rate = self.processed_count / elapsed if elapsed > 0 else 0
+        
+        return {
+            "processed_count": self.processed_count,
+            "processing_rate": round(rate, 2),
+            "memory_usage_mb": round(self.memory_usage, 2),
+            "elapsed_seconds": round(elapsed, 2),
+            "estimated_completion": round((self.config.batch_size - self.processed_count) / rate, 2) if rate > 0 else 0
+        }
 
 class CheckpointManager:
     """Manages scan progress and recovery"""
@@ -279,6 +369,10 @@ class K8sUltimateScanner:
         self.credential_validator = AdvancedCredentialValidator()
         self.checkpoint_manager = CheckpointManager(config.session_id, config.output_dir / "checkpoints")
         
+        # Large-scale optimization
+        self.large_scale_optimizer = LargeScaleOptimizer(config)
+        self.optimized_session = None
+        
         # Scanning state
         self.scan_results: List[ScanResult] = []
         self.processed_ips: Set[str] = set()
@@ -289,7 +383,8 @@ class K8sUltimateScanner:
             "found_credentials": 0,
             "validated_credentials": 0,
             "start_time": None,
-            "end_time": None
+            "end_time": None,
+            "performance_stats": {}
         }
         
         # K8s specific ports and endpoints
@@ -351,7 +446,7 @@ class K8sUltimateScanner:
         return EnhancedCredentialDetector(filter_config)
     
     async def scan_targets(self, targets: List[str]) -> List[ScanResult]:
-        """Main scanning method for multiple targets"""
+        """Main scanning method for multiple targets with large-scale optimizations"""
         self.logger.info(f"🚀 Starting K8s Ultimate Scan - Session: {self.config.session_id}")
         self.logger.info(f"Mode: {self.config.mode.value}, Concurrent: {self.config.max_concurrent}")
         
@@ -359,6 +454,12 @@ class K8sUltimateScanner:
         expanded_ips = await self._expand_targets(targets)
         self.scan_stats["total_ips"] = len(expanded_ips)
         self.scan_stats["start_time"] = datetime.utcnow()
+        
+        # Optimize configuration for scale
+        if len(expanded_ips) > 100000:  # 100K+ targets
+            self.logger.info(f"🔧 Large scale detected ({len(expanded_ips)} targets) - optimizing configuration")
+            self.config = self.large_scale_optimizer.optimize_config_for_scale(len(expanded_ips))
+            self.logger.info(f"📊 Optimized: concurrent={self.config.max_concurrent}, batch_size={self.config.batch_size}")
         
         # Load checkpoint if available
         checkpoint_data = self.checkpoint_manager.load_checkpoint()
@@ -371,38 +472,256 @@ class K8sUltimateScanner:
             expanded_ips = [ip for ip in expanded_ips if ip not in self.processed_ips]
             self.logger.info(f"🔄 Resuming scan with {len(expanded_ips)} remaining IPs")
         
+        # Initialize optimized session for large scale
+        if self.config.large_scale_mode:
+            self.optimized_session = await self.large_scale_optimizer.create_optimized_session()
+        
         # Initialize credential validator
         await self.credential_validator.initialize()
         
         try:
-            # Create semaphore for concurrency control
-            semaphore = asyncio.Semaphore(self.config.max_concurrent)
+            # Process targets in optimized batches
+            await self._process_targets_in_batches(expanded_ips)
+        
+        finally:
+            if self.optimized_session:
+                await self.optimized_session.close()
+            await self.credential_validator.close()
+            self.scan_stats["end_time"] = datetime.utcnow()
             
-            # Create scanning tasks
+            # Generate final report
+            await self._generate_reports()
+            
+            # Clean up checkpoint on successful completion
+            if self.config.enable_checkpoint:
+                self.checkpoint_manager.cleanup_checkpoint()
+        
+        return self.scan_results
+    
+    async def _process_targets_in_batches(self, targets: List[str]):
+        """Process targets in optimized batches with memory monitoring"""
+        batch_size = self.config.batch_size if self.config.large_scale_mode else self.config.checkpoint_interval
+        
+        for batch_start in range(0, len(targets), batch_size):
+            batch_end = min(batch_start + batch_size, len(targets))
+            batch_targets = targets[batch_start:batch_end]
+            
+            self.logger.info(f"🔄 Processing batch {batch_start//batch_size + 1}/{(len(targets)-1)//batch_size + 1} ({len(batch_targets)} targets)")
+            
+            # Memory monitoring for large scale
+            if self.config.enable_memory_monitoring and not self.large_scale_optimizer.monitor_memory_usage():
+                self.logger.warning("⚠️ Memory limit reached - triggering garbage collection")
+                import gc
+                gc.collect()
+                await asyncio.sleep(1)  # Brief pause for memory cleanup
+            
+            # Create semaphore for this batch
+            concurrent_limit = min(self.config.max_concurrent, len(batch_targets))
+            semaphore = asyncio.Semaphore(concurrent_limit)
+            
+            # Create scanning tasks for this batch
             tasks = [
-                self._scan_single_target(semaphore, ip)
-                for ip in expanded_ips
+                self._scan_single_target_optimized(semaphore, ip)
+                for ip in batch_targets
             ]
             
-            # Process in batches with checkpoint saving
-            batch_size = self.config.checkpoint_interval
-            for i in range(0, len(tasks), batch_size):
-                batch = tasks[i:i + batch_size]
-                batch_results = await asyncio.gather(*batch, return_exceptions=True)
+            # Process batch
+            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Process results
+            for result in batch_results:
+                if isinstance(result, ScanResult):
+                    self.scan_results.append(result)
+                    self.processed_ips.add(result.target_ip)
+                    self.large_scale_optimizer.processed_count += 1
+                elif isinstance(result, Exception):
+                    self.logger.error(f"Scan error: {result}")
+            
+            # Update statistics
+            self.scan_stats["performance_stats"] = self.large_scale_optimizer.get_performance_stats()
+            
+            # Save checkpoint
+            if self.config.enable_checkpoint:
+                self.checkpoint_manager.save_checkpoint(
+                    self.processed_ips,
+                    self.scan_results,
+                    self.scan_stats
+                )
+            
+            # Log progress
+            progress_pct = (len(self.processed_ips) / self.scan_stats["total_ips"]) * 100
+            stats = self.scan_stats["performance_stats"]
+            self.logger.info(f"📊 Progress: {len(self.processed_ips)}/{self.scan_stats['total_ips']} ({progress_pct:.1f}%) | Rate: {stats['processing_rate']}/s | Memory: {stats['memory_usage_mb']:.0f}MB")
+    
+    async def _scan_single_target_optimized(self, semaphore: asyncio.Semaphore, ip: str) -> Optional[ScanResult]:
+        """Optimized single target scanning for large scale"""
+        async with semaphore:
+            # Use optimized session if available
+            session = self.optimized_session if self.optimized_session else None
+            
+            # Apply minimal rate limiting for large scale
+            if self.config.mode == ScanMode.STEALTH and not self.config.large_scale_mode:
+                delay = time.random() * (self.config.stealth_delays[1] - self.config.stealth_delays[0]) + self.config.stealth_delays[0]
+                await asyncio.sleep(delay)
+            elif self.config.large_scale_mode:
+                # Minimal delay for large scale
+                await asyncio.sleep(0.001)
+            
+            # Scan priority K8s ports first for efficiency
+            priority_ports = [6443, 8443, 443]
+            all_ports = self.k8s_ports
+            
+            # Try priority ports first
+            for port in priority_ports:
+                result = await self._scan_port_optimized(ip, port, session)
+                if result:
+                    self.scan_stats["scanned_ips"] += 1
+                    return result
+            
+            # Try remaining ports if needed
+            for port in all_ports:
+                if port not in priority_ports:
+                    result = await self._scan_port_optimized(ip, port, session)
+                    if result:
+                        self.scan_stats["scanned_ips"] += 1
+                        return result
+            
+            return None
+    
+    async def _scan_port_optimized(self, ip: str, port: int, session: Optional[aiohttp.ClientSession] = None) -> Optional[ScanResult]:
+        """Optimized port scanning for large scale operations"""
+        start_time = time.time()
+        
+        try:
+            # Use provided session or create a minimal one
+            if session:
+                use_session = session
+                close_session = False
+            else:
+                connector = aiohttp.TCPConnector(
+                    ssl=False,
+                    limit=50,
+                    limit_per_host=10,
+                    enable_cleanup_closed=True
+                )
+                timeout = aiohttp.ClientTimeout(total=self.config.timeout)
+                use_session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+                close_session = True
+            
+            try:
+                # Try HTTPS first for K8s API, then HTTP
+                protocols = ['https', 'http'] if port in [6443, 8443, 443] else ['http', 'https']
                 
-                # Process results
-                for result in batch_results:
-                    if isinstance(result, ScanResult):
-                        self.scan_results.append(result)
-                        self.processed_ips.add(result.target_ip)
-                    elif isinstance(result, Exception):
-                        self.logger.error(f"Scan error: {result}")
+                for protocol in protocols:
+                    endpoint = f"{protocol}://{ip}:{port}"
+                    
+                    headers = {
+                        "User-Agent": self.config.user_agents[0] if self.config.user_agents else "kubectl/v1.24.0",
+                        "Accept": "application/json"
+                    }
+                    
+                    # Common K8s API paths to check
+                    paths_to_check = ["/api/v1", "/version", "/", "/healthz"]
+                    
+                    for path in paths_to_check:
+                        try:
+                            url = f"{endpoint}{path}"
+                            async with use_session.get(url, headers=headers, ssl=False) as response:
+                                response_time = time.time() - start_time
+                                
+                                # Consider it a K8s service if we get specific responses
+                                if response.status in [200, 401, 403]:
+                                    content = await response.text()
+                                    
+                                    # Create scan result
+                                    result = ScanResult(
+                                        target_ip=ip,
+                                        port=port,
+                                        service="kubernetes",
+                                        response_time=response_time
+                                    )
+                                    
+                                    # Check for K8s indicators
+                                    k8s_indicators = [
+                                        "apiVersion", "kubernetes", "kube-", "pods", "namespaces",
+                                        "serviceaccount", "rbac", "cluster", "api/v1"
+                                    ]
+                                    
+                                    is_k8s = any(indicator in content.lower() for indicator in k8s_indicators)
+                                    
+                                    if is_k8s:
+                                        result.service = "kubernetes"
+                                        result.metadata["k8s_detected"] = True
+                                        result.metadata["endpoint"] = url
+                                        result.metadata["response_status"] = response.status
+                                        
+                                        # Extract version if available
+                                        if "version" in content.lower():
+                                            # Simple version extraction
+                                            import re
+                                            version_match = re.search(r'"gitVersion":"([^"]+)"', content)
+                                            if version_match:
+                                                result.version = version_match.group(1)
+                                        
+                                        # Look for credentials in response
+                                        if self.credential_detector:
+                                            credentials = await self._extract_credentials_from_content(content, ip, port)
+                                            result.credentials.extend(credentials)
+                                        
+                                        self.scan_stats["found_services"] += 1
+                                        if result.credentials:
+                                            self.scan_stats["found_credentials"] += len(result.credentials)
+                                        
+                                        return result
+                                
+                        except asyncio.TimeoutError:
+                            continue  # Try next path
+                        except Exception:
+                            continue  # Try next path
                 
-                # Save checkpoint
-                if self.config.enable_checkpoint:
-                    self.checkpoint_manager.save_checkpoint(
-                        self.processed_ips,
-                        self.scan_results,
+            finally:
+                if close_session:
+                    await use_session.close()
+        
+        except Exception as e:
+            self.logger.debug(f"Scan error for {ip}:{port} - {e}")
+        
+        return None
+    
+    async def _extract_credentials_from_content(self, content: str, ip: str, port: int) -> List[CredentialMatch]:
+        """Extract credentials from response content"""
+        credentials = []
+        
+        try:
+            # Use the enhanced credential detector
+            detected_creds = self.credential_detector.scan_content(content)
+            
+            for cred_type, matches in detected_creds.items():
+                for match in matches:
+                    credential = CredentialMatch(
+                        type=cred_type.value if hasattr(cred_type, 'value') else str(cred_type),
+                        value=match.get('value', ''),
+                        confidence=match.get('confidence', 0.5),
+                        context=match.get('context', '')[:100],  # Limit context length
+                        source_ip=ip,
+                        source_port=port
+                    )
+                    
+                    # Validate credential if configured
+                    if self.config.validation_type != ValidationType.NONE:
+                        validation_result = await self.credential_validator.validate_credential(credential)
+                        credential.validated = validation_result.get('validated', False)
+                        credential.validation_result = validation_result
+                        
+                        if credential.validated:
+                            self.scan_stats["validated_credentials"] += 1
+                    
+                    credentials.append(credential)
+        
+        except Exception as e:
+            self.logger.debug(f"Credential extraction error: {e}")
+        
+        return credentials
                         self.scan_stats
                     )
                 
