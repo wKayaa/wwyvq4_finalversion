@@ -679,6 +679,11 @@ def parse_master_arguments():
   python wwyvq_master_final.py --mode ultimate --file massive_cidrs.txt --threads 1000 --validate-credentials
   python wwyvq_master_final.py --mode all --file targets.txt --web --threads 1000
   python wwyvq_master_final.py --mode stealth --target example.com --threads 5
+  
+🧠 MEMORY OPTIMIZATION EXAMPLES:
+  python wwyvq_master_final.py --mode ultimate --file 16M_targets.txt --chunk-size 50000 --memory-monitor
+  python wwyvq_master_final.py --mode all --file massive.txt --force-chunked --max-memory-percent 70
+  python wwyvq_master_final.py --mode ultimate --target 10.0.0.0/8 --stream-results --chunk-size 25000
         '''
     )
     
@@ -705,6 +710,17 @@ def parse_master_arguments():
     parser.add_argument('--validate-credentials', action='store_true', 
                        help='Enable real-time credential validation (ultimate mode)')
     parser.add_argument('--proxy', help='SOCKS5/HTTP proxy for stealth (format: socks5://127.0.0.1:9050)')
+    
+    # Memory Management Options (NEW)
+    parser.add_argument('--chunk-size', type=int, help='Override automatic chunk size for target processing')
+    parser.add_argument('--max-memory-percent', type=float, default=80.0, 
+                       help='Maximum memory usage percentage before forcing cleanup (default: 80)')
+    parser.add_argument('--force-chunked', action='store_true', 
+                       help='Force chunked processing even for small target sets')
+    parser.add_argument('--memory-monitor', action='store_true', 
+                       help='Enable detailed memory monitoring and reporting')
+    parser.add_argument('--stream-results', action='store_true', default=True,
+                       help='Stream results to disk instead of storing in memory (default: enabled)')
     
     # Options
     parser.add_argument('--verbose', '-v', action='store_true', help='Mode verbose')
