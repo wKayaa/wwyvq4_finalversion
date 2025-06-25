@@ -1,0 +1,19 @@
+{
+  "scan_metadata": {
+    "session_id": "66f6aa57",
+    "scan_mode": "ultimate",
+    "start_time": "2025-06-25T01:59:46.563497",
+    "end_time": "2025-06-25T01:59:52.583318",
+    "duration_seconds": 6.019821,
+    "statistics": {
+      "total_ips": 1,
+      "scanned_ips": 0,
+      "found_services": 0,
+      "found_credentials": 0,
+      "validated_credentials": 0,
+      "start_time": "2025-06-25T01:59:46.563497",
+      "end_time": "2025-06-25T01:59:52.583318"
+    }
+  },
+  "scan_results": []
+}

@@ -27,10 +27,14 @@ security_scan_results/
 *.log
 .pytest_cache/
 
-# F8S Framework specific exclusions
+# Results and checkpoints
 results/
-sessions/
+results_*/
 test_results/
+test_checkpoints/
+demo_results/
+checkpoints/
+sessions/
 test_*.txt
 *_test.txt
 test_pipeline_targets.txt

