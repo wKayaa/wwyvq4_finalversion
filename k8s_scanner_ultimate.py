@@ -722,23 +722,6 @@ class K8sUltimateScanner:
             self.logger.debug(f"Credential extraction error: {e}")
         
         return credentials
-                        self.scan_stats
-                    )
-                
-                self.logger.info(f"📊 Processed {len(self.processed_ips)}/{self.scan_stats['total_ips']} IPs")
-        
-        finally:
-            await self.credential_validator.close()
-            self.scan_stats["end_time"] = datetime.utcnow()
-            
-            # Generate final report
-            await self._generate_reports()
-            
-            # Clean up checkpoint on successful completion
-            if self.config.enable_checkpoint:
-                self.checkpoint_manager.cleanup_checkpoint()
-        
-        return self.scan_results
     
     async def _expand_targets(self, targets: List[str]) -> List[str]:
         """Expand CIDR ranges and hostnames to individual IPs"""
