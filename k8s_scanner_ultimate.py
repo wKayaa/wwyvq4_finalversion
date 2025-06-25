@@ -351,12 +351,23 @@ class K8sUltimateScanner:
         return EnhancedCredentialDetector(filter_config)
     
     async def scan_targets(self, targets: List[str]) -> List[ScanResult]:
-        """Main scanning method for multiple targets"""
+        """Main scanning method for multiple targets with memory optimization"""
         self.logger.info(f"🚀 Starting K8s Ultimate Scan - Session: {self.config.session_id}")
         self.logger.info(f"Mode: {self.config.mode.value}, Concurrent: {self.config.max_concurrent}")
         
-        # Expand targets to individual IPs
-        expanded_ips = await self._expand_targets(targets)
+        # Use memory-efficient target expansion
+        from utils.memory_manager import MemoryManager
+        memory_manager = MemoryManager()
+        
+        # Get memory configuration
+        memory_config = memory_manager.get_memory_info()
+        
+        # Limit concurrent tasks based on available memory
+        effective_concurrent = min(self.config.max_concurrent, memory_config.max_concurrent_tasks)
+        self.logger.info(f"💾 Adjusted concurrency to {effective_concurrent} based on available memory")
+        
+        # Expand targets to individual IPs with memory monitoring
+        expanded_ips = await self._expand_targets_memory_efficient(targets)
         self.scan_stats["total_ips"] = len(expanded_ips)
         self.scan_stats["start_time"] = datetime.utcnow()
         
@@ -365,7 +376,11 @@ class K8sUltimateScanner:
         if checkpoint_data and self.config.enable_checkpoint:
             self.logger.info("📂 Loading previous checkpoint")
             self.processed_ips = checkpoint_data["processed_ips"]
-            self.scan_results = checkpoint_data["scan_results"]
+            
+            # For memory efficiency, don't load all previous results
+            # Instead, just track what was processed
+            previous_results_count = len(checkpoint_data.get("scan_results", []))
+            self.logger.info(f"📊 Previous session had {previous_results_count} results")
             
             # Remove already processed IPs
             expanded_ips = [ip for ip in expanded_ips if ip not in self.processed_ips]
@@ -374,43 +389,76 @@ class K8sUltimateScanner:
         # Initialize credential validator
         await self.credential_validator.initialize()
         
+        # Setup memory-efficient result processing
+        all_results = []
+        
         try:
             # Create semaphore for concurrency control
-            semaphore = asyncio.Semaphore(self.config.max_concurrent)
+            semaphore = asyncio.Semaphore(effective_concurrent)
             
-            # Create scanning tasks
-            tasks = [
-                self._scan_single_target(semaphore, ip)
-                for ip in expanded_ips
-            ]
+            # Process in smaller batches to manage memory
+            batch_size = min(self.config.checkpoint_interval, memory_config.recommended_chunk_size // 10)
+            processed_count = 0
             
-            # Process in batches with checkpoint saving
-            batch_size = self.config.checkpoint_interval
-            for i in range(0, len(tasks), batch_size):
-                batch = tasks[i:i + batch_size]
-                batch_results = await asyncio.gather(*batch, return_exceptions=True)
+            for i in range(0, len(expanded_ips), batch_size):
+                batch_ips = expanded_ips[i:i + batch_size]
                 
-                # Process results
-                for result in batch_results:
+                # Monitor memory before processing batch
+                usage, warning = memory_manager.check_memory_usage()
+                if warning:
+                    self.logger.warning(f"⚠️ High memory usage detected: {usage:.1f}%")
+                    memory_manager.force_cleanup()
+                
+                # Create scanning tasks for this batch
+                tasks = [
+                    self._scan_single_target(semaphore, ip)
+                    for ip in batch_ips
+                ]
+                
+                # Process batch
+                self.logger.info(f"🔄 Processing batch {i//batch_size + 1}: {len(batch_ips)} IPs")
+                batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Process results and add successful ones
+                batch_valid_results = []
+                for ip, result in zip(batch_ips, batch_results):
                     if isinstance(result, ScanResult):
-                        self.scan_results.append(result)
-                        self.processed_ips.add(result.target_ip)
+                        batch_valid_results.append(result)
+                        self.processed_ips.add(ip)
                     elif isinstance(result, Exception):
-                        self.logger.error(f"Scan error: {result}")
+                        self.logger.error(f"Scan error for {ip}: {result}")
+                    else:
+                        # No result (target not responsive)
+                        self.processed_ips.add(ip)
                 
-                # Save checkpoint
+                # Add to results
+                all_results.extend(batch_valid_results)
+                processed_count += len(batch_ips)
+                
+                # Save checkpoint with limited data to save memory
                 if self.config.enable_checkpoint:
+                    # Only save essential checkpoint data, not all results
+                    checkpoint_metadata = {
+                        "processed_count": processed_count,
+                        "results_count": len(all_results),
+                        "last_batch": i//batch_size + 1
+                    }
                     self.checkpoint_manager.save_checkpoint(
                         self.processed_ips,
-                        self.scan_results,
-                        self.scan_stats
+                        [],  # Don't save all results in checkpoint to save memory
+                        {**self.scan_stats, **checkpoint_metadata}
                     )
                 
-                self.logger.info(f"📊 Processed {len(self.processed_ips)}/{self.scan_stats['total_ips']} IPs")
+                self.logger.info(f"📊 Progress: {processed_count}/{len(expanded_ips)} IPs, {len(all_results)} results found")
+                
+                # Force cleanup after each batch
+                if (i // batch_size + 1) % 5 == 0:  # Every 5 batches
+                    memory_manager.force_cleanup()
         
         finally:
             await self.credential_validator.close()
             self.scan_stats["end_time"] = datetime.utcnow()
+            self.scan_stats["final_results_count"] = len(all_results)
             
             # Generate final report
             await self._generate_reports()
@@ -419,7 +467,39 @@ class K8sUltimateScanner:
             if self.config.enable_checkpoint:
                 self.checkpoint_manager.cleanup_checkpoint()
         
-        return self.scan_results
+        self.scan_results = all_results
+        return all_results
+    
+    async def _expand_targets_memory_efficient(self, targets: List[str]) -> List[str]:
+        """Memory-efficient target expansion with limits"""
+        from utils.target_expander import TargetExpander
+        
+        target_expander = TargetExpander()
+        
+        # Estimate memory impact
+        total_count, estimated_mb = target_expander.estimate_memory_usage(targets)
+        
+        if total_count > 1000000:  # More than 1M targets
+            self.logger.warning(f"⚠️ Large target set: {total_count:,} targets (~{estimated_mb:.1f} MB)")
+            self.logger.warning("⚠️ Consider using chunked processing to avoid OOM")
+        
+        # For very large sets, use generator to avoid loading all at once
+        if total_count > 100000:
+            expanded = []
+            count = 0
+            for target_ip in target_expander.expand_targets_generator(targets):
+                expanded.append(target_ip)
+                count += 1
+                
+                # Limit total to prevent OOM
+                if count >= 100000:
+                    self.logger.warning(f"⚠️ Limited expansion to 100K targets to prevent OOM")
+                    break
+            
+            return expanded
+        else:
+            # Use legacy method for smaller target sets
+            return await target_expander.expand_targets(targets)
     
     async def _expand_targets(self, targets: List[str]) -> List[str]:
         """Expand CIDR ranges and hostnames to individual IPs"""
