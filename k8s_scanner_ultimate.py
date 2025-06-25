@@ -116,16 +116,33 @@ class ScannerConfig:
         """Get optimized configuration for lightning mode"""
         return cls(
             mode=ScanMode.LIGHTNING,
-            max_concurrent=20000,  # Extreme concurrency
-            timeout=1,  # 1 second timeout
+            max_concurrent=50000,  # Even higher concurrency
+            timeout=0.3,  # Even faster timeout
             validation_type=ValidationType.NONE,  # Skip validation
             enable_checkpoint=False,  # No checkpoints
-            rate_limit_per_second=10000,  # No rate limiting
+            rate_limit_per_second=50000,  # No rate limiting
             lightning_ports=[6443, 8443, 10250],  # Critical ports only
             syn_scan_first=True,
-            connection_pool_size=10000,
-            batch_size=100,
-            max_parallel_batches=25
+            connection_pool_size=20000,
+            batch_size=25,  # Smaller batches for faster response
+            max_parallel_batches=100  # More parallel batches
+        )
+    
+    @classmethod
+    def get_hyper_lightning_config(cls):
+        """Get hyper-optimized configuration for maximum speed"""
+        return cls(
+            mode=ScanMode.LIGHTNING,
+            max_concurrent=100000,  # Push system limits
+            timeout=0.2,  # Extremely fast timeout
+            validation_type=ValidationType.NONE,
+            enable_checkpoint=False,
+            rate_limit_per_second=100000,
+            lightning_ports=[6443, 8443, 10250],
+            syn_scan_first=True,
+            connection_pool_size=50000,
+            batch_size=15,  # Very small batches
+            max_parallel_batches=200  # Maximum parallelism
         )
 
 @dataclass
@@ -943,6 +960,7 @@ async def main():
     parser.add_argument("--validate", action="store_true", help="Enable credential validation")
     parser.add_argument("--output", "-o", default="./results", help="Output directory")
     parser.add_argument("--lightning", action="store_true", help="Use lightning mode for ultra-fast scanning")
+    parser.add_argument("--hyper", action="store_true", help="Use hyper-lightning mode for maximum speed")
     
     args = parser.parse_args()
     
@@ -954,7 +972,13 @@ async def main():
         targets = [t.strip() for t in args.targets.split(',')]
     
     # Configure scanner
-    if args.lightning or args.mode == "lightning":
+    if args.hyper:
+        config = ScannerConfig.get_hyper_lightning_config()
+        config.output_dir = Path(args.output)
+        print("🚀 HYPER-LIGHTNING MODE ENABLED - Maximum performance scanning")
+        print(f"⚡ Concurrency: {config.max_concurrent}, Timeout: {config.timeout}s")
+        print(f"🎯 Ports: {config.lightning_ports}")
+    elif args.lightning or args.mode == "lightning":
         config = ScannerConfig.get_lightning_config()
         config.output_dir = Path(args.output)
         print("⚡ LIGHTNING MODE ENABLED - Ultra-fast scanning with minimal validation")
